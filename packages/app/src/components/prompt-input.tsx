@@ -80,6 +80,8 @@ import { PromptDragOverlay } from "./prompt-input/drag-overlay"
 import { promptPlaceholder } from "./prompt-input/placeholder"
 import { createPromptInputTransientState } from "./prompt-input/transient-state"
 import { showToast } from "@/utils/toast"
+import { useSettings } from "@/context/settings"
+import { createDictationController, appendDictationTranscript } from "@/utils/dictation"
 import { ImagePreview } from "@opencode-ai/ui/image-preview"
 import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
 
@@ -127,7 +129,40 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const permission = usePermission()
   const language = useLanguage()
   const platform = usePlatform()
+  const settings = useSettings()
   const tabs = () => props.controls.session.tabs
+
+  const dictation = createDictationController({
+    getConfig: () => {
+      const provider = settings.dictation.provider()
+      const apiKey = provider === "groq" ? settings.dictation.groqApiKey() : settings.dictation.openaiApiKey()
+      const model = provider === "groq" ? settings.dictation.groqModel() : settings.dictation.openaiModel()
+      const language = settings.dictation.language()
+      return {
+        provider,
+        apiKey,
+        model,
+        language,
+      }
+    },
+    onTranscript: (text) => {
+      const current = prompt.current()
+      const updated = appendDictationTranscript(current, text)
+      const length = promptLength(updated)
+      prompt.set(updated, length)
+      requestAnimationFrame(() => {
+        editorRef.focus()
+        setCursorPosition(editorRef, length)
+        queueScroll()
+      })
+    },
+    onError: (err) => {
+      showToast({
+        title: language.t("prompt.dictation.error.title"),
+        description: err.message,
+      })
+    },
+  })
   let editorRef!: HTMLDivElement
   let fileInputRef: HTMLInputElement | undefined
   let scrollRef!: HTMLDivElement
@@ -320,15 +355,21 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const suggest = createMemo(() => !hasUserPrompt())
 
-  const placeholder = createMemo(() =>
-    promptPlaceholder({
+  const placeholder = createMemo(() => {
+    if (dictation.isRecording()) {
+      return language.t("prompt.dictation.listening")
+    }
+    if (dictation.isTranscribing()) {
+      return language.t("prompt.dictation.transcribing")
+    }
+    return promptPlaceholder({
       mode: store.mode,
       commentCount: commentCount(),
       example: suggest() ? (store.mode === "shell" ? "git status" : language.t(EXAMPLES[store.placeholder])) : "",
       suggest: suggest(),
       t: (key, params) => language.t(key as Parameters<typeof language.t>[0], params as never),
-    }),
-  )
+    })
+  })
 
   const historyComments = () => {
     const byID = new Map(comments.all().map((item) => [`${item.file}\n${item.id}`, item] as const))
@@ -1266,6 +1307,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }
 
     if (event.key === "Escape") {
+      if (dictation.isActive()) {
+        dictation.cancel()
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+
       if (store.popover) {
         closePopover()
         event.preventDefault()
@@ -1575,6 +1623,38 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             />
 
             <div class="flex items-center gap-1 pointer-events-auto">
+              <Tooltip
+                placement="top"
+                value={
+                  dictation.isRecording()
+                    ? language.t("prompt.action.stopDictate")
+                    : dictation.isTranscribing()
+                      ? language.t("prompt.dictation.transcribing")
+                      : language.t("prompt.action.dictate")
+                }
+              >
+                <IconButton
+                  data-action="prompt-dictate"
+                  type="button"
+                  icon={dictation.isRecording() ? "stop" : "mic"}
+                  variant={dictation.isRecording() ? "primary" : "ghost"}
+                  class={
+                    dictation.isRecording()
+                      ? "size-8 animate-pulse text-red-500"
+                      : dictation.isTranscribing()
+                        ? "size-8 animate-spin text-text-weak"
+                        : "size-8 text-text-weak hover:text-text-strong"
+                  }
+                  disabled={dictation.isTranscribing()}
+                  onClick={dictation.toggle}
+                  aria-label={
+                    dictation.isRecording()
+                      ? language.t("prompt.action.stopDictate")
+                      : language.t("prompt.action.dictate")
+                  }
+                />
+              </Tooltip>
+
               <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
                 <IconButton
                   data-action="prompt-submit"

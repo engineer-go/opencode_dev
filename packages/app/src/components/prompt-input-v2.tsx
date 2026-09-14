@@ -3,6 +3,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
+import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
@@ -23,7 +24,9 @@ import { usePermission } from "@/context/permission"
 import { type ImageAttachmentPart, usePrompt } from "@/context/prompt"
 import { usePlatform } from "@/context/platform"
 import { useSDK } from "@/context/sdk"
+import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
+import { createDictationController, appendDictationTranscript } from "@/utils/dictation"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { showToast } from "@/utils/toast"
 import { PromptInputV2, type PromptInputV2Suggestion } from "@opencode-ai/session-ui/v2/prompt-input"
@@ -42,6 +45,7 @@ export type PromptInputV2ComposerProps = {
 export type PromptInputV2ControllerProps = Omit<PromptInputProps, "class" | "submission">
 export type PromptInputV2ComposerController = PromptInputV2Interaction & {
   readonly model: PromptInputProps["controls"]["model"]
+  readonly dictation?: ReturnType<typeof createDictationController>
 }
 
 export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
@@ -58,6 +62,43 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         variantControlVisible={!props.controller.model.loading}
         attachKeybind={command.keybindParts("file.attach")}
         attachShortcut={command.keybind("file.attach")}
+        dictationControl={
+          <Show when={props.controller.dictation}>
+            {(dictation) => (
+              <TooltipV2
+                placement="top"
+                value={
+                  dictation().isRecording()
+                    ? language.t("prompt.action.stopDictate")
+                    : dictation().isTranscribing()
+                      ? language.t("prompt.dictation.transcribing")
+                      : language.t("prompt.action.dictate")
+                }
+              >
+                <IconButtonV2
+                  data-action="prompt-dictate"
+                  type="button"
+                  icon={<Icon name={dictation().isRecording() ? "stop" : "mic"} size="small" />}
+                  variant="ghost"
+                  class={
+                    dictation().isRecording()
+                      ? "size-7 animate-pulse text-red-500"
+                      : dictation().isTranscribing()
+                        ? "size-7 animate-spin text-text-weak"
+                        : "size-7 text-text-weak hover:text-text-strong"
+                  }
+                  disabled={dictation().isTranscribing()}
+                  onClick={dictation().toggle}
+                  aria-label={
+                    dictation().isRecording()
+                      ? language.t("prompt.action.stopDictate")
+                      : language.t("prompt.action.dictate")
+                  }
+                />
+              </TooltipV2>
+            )}
+          </Show>
+        }
         modelControl={
           <PromptInputV2ModelControl
             loading={props.controller.model.loading}
@@ -128,19 +169,63 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     return text.trim().length === 0 && attachments().length === 0 && commentCount() === 0
   })
   const stopping = createMemo(() => working() && blank())
-  const placeholder = createMemo(() =>
-    promptPlaceholder({
+
+  const settings = useSettings()
+
+  const dictation = createDictationController({
+    getConfig: () => {
+      const provider = settings.dictation.provider()
+      const apiKey = provider === "groq" ? settings.dictation.groqApiKey() : settings.dictation.openaiApiKey()
+      const model = provider === "groq" ? settings.dictation.groqModel() : settings.dictation.openaiModel()
+      const language = settings.dictation.language()
+      return {
+        provider,
+        apiKey,
+        model,
+        language,
+      }
+    },
+    onTranscript: (text) => {
+      const current = prompt.current()
+      const updated = appendDictationTranscript(current, text)
+      const length = promptLength(updated)
+      prompt.set(updated, length)
+      controller.restoreFocus()
+    },
+    onError: (err) => {
+      showToast({
+        title: language.t("prompt.dictation.error.title"),
+        description: err.message,
+      })
+    },
+  })
+
+  const placeholder = createMemo(() => {
+    if (dictation.isRecording()) {
+      return language.t("prompt.dictation.listening")
+    }
+    if (dictation.isTranscribing()) {
+      return language.t("prompt.dictation.transcribing")
+    }
+    return promptPlaceholder({
       mode: mode(),
       commentCount: commentCount(),
       example: mode() === "shell" ? "git status" : "",
       suggest: false,
       t: (key, params) => language.t(key as Parameters<typeof language.t>[0], params as never),
-    }),
-  )
-  const designPlaceholder = () =>
-    promptDesignPlaceholder(mode(), placeholder(), (key, params) =>
+    })
+  })
+  const designPlaceholder = () => {
+    if (dictation.isRecording()) {
+      return language.t("prompt.dictation.listening")
+    }
+    if (dictation.isTranscribing()) {
+      return language.t("prompt.dictation.transcribing")
+    }
+    return promptDesignPlaceholder(mode(), placeholder(), (key, params) =>
       language.t(key as Parameters<typeof language.t>[0], params as never),
     )
+  }
 
   const historyComments = () => {
     const byID = new Map(comments.all().map((item) => [`${item.file}\n${item.id}`, item] as const))
@@ -409,6 +494,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     },
   })
   Object.defineProperty(controller, "model", { get: () => props.controls.model })
+  Object.defineProperty(controller, "dictation", { get: () => dictation })
 
   command.register("prompt-input", () => [
     {

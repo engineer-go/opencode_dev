@@ -81,6 +81,9 @@ const getBase = (appId: string): Configuration => ({
     entitlementsInherit: "resources/entitlements.plist",
     notarize: true,
     target: ["dmg", "zip"],
+    extendInfo: {
+      NSMicrophoneUsageDescription: "OpenCode needs microphone access for voice dictation.",
+    },
   },
   dmg: {
     sign: true,

@@ -19,6 +19,15 @@ export interface SoundSettings {
   errors: string
 }
 
+export interface DictationSettings {
+  provider: "groq" | "openai"
+  groqApiKey: string
+  groqModel: string
+  openaiApiKey: string
+  openaiModel: string
+  language: string
+}
+
 export interface Settings {
   general: {
     autoSave: boolean
@@ -52,6 +61,7 @@ export interface Settings {
   }
   notifications: NotificationSettings
   sounds: SoundSettings
+  dictation: DictationSettings
 }
 
 export const monoDefault = "System Mono"
@@ -218,6 +228,14 @@ const defaultSettings: Settings = {
     permissions: "staplebops-02",
     errorsEnabled: true,
     errors: "nope-03",
+  },
+  dictation: {
+    provider: "groq",
+    groqApiKey: "",
+    groqModel: "whisper-large-v3-turbo",
+    openaiApiKey: "",
+    openaiModel: "whisper-1",
+    language: "",
   },
 }
 
@@ -540,6 +558,32 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         errors: withFallback(() => store.sounds?.errors, defaultSettings.sounds.errors),
         setErrors(value: string) {
           setStore("sounds", "errors", value)
+        },
+      },
+      dictation: {
+        provider: withFallback(() => store.dictation?.provider, defaultSettings.dictation.provider),
+        setProvider(value: "groq" | "openai") {
+          setStore("dictation", "provider", value)
+        },
+        groqApiKey: withFallback(() => store.dictation?.groqApiKey, defaultSettings.dictation.groqApiKey),
+        setGroqApiKey(value: string) {
+          setStore("dictation", "groqApiKey", value)
+        },
+        groqModel: withFallback(() => store.dictation?.groqModel, defaultSettings.dictation.groqModel),
+        setGroqModel(value: string) {
+          setStore("dictation", "groqModel", value)
+        },
+        openaiApiKey: withFallback(() => store.dictation?.openaiApiKey, defaultSettings.dictation.openaiApiKey),
+        setOpenaiApiKey(value: string) {
+          setStore("dictation", "openaiApiKey", value)
+        },
+        openaiModel: withFallback(() => store.dictation?.openaiModel, defaultSettings.dictation.openaiModel),
+        setOpenaiModel(value: string) {
+          setStore("dictation", "openaiModel", value)
+        },
+        language: withFallback(() => store.dictation?.language, defaultSettings.dictation.language),
+        setLanguage(value: string) {
+          setStore("dictation", "language", value)
         },
       },
     }

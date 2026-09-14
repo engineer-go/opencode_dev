@@ -671,6 +671,140 @@ export const SettingsGeneral: Component = () => {
     </div>
   )
 
+  const DictationSection = () => {
+    const providerOptions = [
+      { id: "groq" as const, label: "Groq (Whisper)" },
+      { id: "openai" as const, label: "OpenAI (Whisper)" },
+    ]
+    return (
+      <div class="flex flex-col gap-1">
+        <h3 class="text-14-medium text-text-strong pb-2">{language.t("settings.general.section.dictation")}</h3>
+
+        <SettingsList>
+          <SettingsRow
+            title={language.t("settings.general.dictation.provider.title")}
+            description={language.t("settings.general.dictation.provider.description")}
+          >
+            <div class="w-full sm:w-[220px]">
+              <Select
+                options={providerOptions}
+                current={providerOptions.find((p) => p.id === settings.dictation.provider()) ?? providerOptions[0]}
+                value={(p) => p.id}
+                label={(p) => p.label}
+                onSelect={(p) => p && settings.dictation.setProvider(p.id)}
+                variant="secondary"
+                size="small"
+                triggerVariant="settings"
+              />
+            </div>
+          </SettingsRow>
+
+          <Show when={settings.dictation.provider() === "groq"}>
+            <SettingsRow
+              title={language.t("settings.general.dictation.groqApiKey.title")}
+              description={language.t("settings.general.dictation.groqApiKey.description")}
+            >
+              <div class="w-full sm:w-[220px]">
+                <TextField
+                  data-action="settings-dictation-groq-key"
+                  type="password"
+                  value={settings.dictation.groqApiKey()}
+                  onChange={(value) => settings.dictation.setGroqApiKey(value)}
+                  placeholder="gsk_..."
+                  spellcheck={false}
+                  autocorrect="off"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  class="text-12-regular"
+                />
+              </div>
+            </SettingsRow>
+            <SettingsRow
+              title={language.t("settings.general.dictation.model.title")}
+              description={language.t("settings.general.dictation.model.description")}
+            >
+              <div class="w-full sm:w-[220px]">
+                <TextField
+                  data-action="settings-dictation-groq-model"
+                  type="text"
+                  value={settings.dictation.groqModel()}
+                  onChange={(value) => settings.dictation.setGroqModel(value)}
+                  placeholder="whisper-large-v3-turbo"
+                  spellcheck={false}
+                  autocorrect="off"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  class="text-12-regular"
+                />
+              </div>
+            </SettingsRow>
+          </Show>
+
+          <Show when={settings.dictation.provider() === "openai"}>
+            <SettingsRow
+              title={language.t("settings.general.dictation.openaiApiKey.title")}
+              description={language.t("settings.general.dictation.openaiApiKey.description")}
+            >
+              <div class="w-full sm:w-[220px]">
+                <TextField
+                  data-action="settings-dictation-openai-key"
+                  type="password"
+                  value={settings.dictation.openaiApiKey()}
+                  onChange={(value) => settings.dictation.setOpenaiApiKey(value)}
+                  placeholder="sk-..."
+                  spellcheck={false}
+                  autocorrect="off"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  class="text-12-regular"
+                />
+              </div>
+            </SettingsRow>
+            <SettingsRow
+              title={language.t("settings.general.dictation.model.title")}
+              description={language.t("settings.general.dictation.model.description")}
+            >
+              <div class="w-full sm:w-[220px]">
+                <TextField
+                  data-action="settings-dictation-openai-model"
+                  type="text"
+                  value={settings.dictation.openaiModel()}
+                  onChange={(value) => settings.dictation.setOpenaiModel(value)}
+                  placeholder="whisper-1"
+                  spellcheck={false}
+                  autocorrect="off"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  class="text-12-regular"
+                />
+              </div>
+            </SettingsRow>
+          </Show>
+
+          <SettingsRow
+            title={language.t("settings.general.dictation.language.title")}
+            description={language.t("settings.general.dictation.language.description")}
+          >
+            <div class="w-full sm:w-[220px]">
+              <TextField
+                data-action="settings-dictation-language"
+                type="text"
+                value={settings.dictation.language()}
+                onChange={(value) => settings.dictation.setLanguage(value)}
+                placeholder="auto"
+                spellcheck={false}
+                autocorrect="off"
+                autocomplete="off"
+                autocapitalize="off"
+                class="text-12-regular"
+              />
+            </div>
+          </SettingsRow>
+        </SettingsList>
+      </div>
+    )
+  }
+
   const UpdatesSection = () => (
     <div class="flex flex-col gap-1">
       <h3 class="text-14-medium text-text-strong pb-2">{language.t("settings.general.section.updates")}</h3>
@@ -763,6 +897,8 @@ export const SettingsGeneral: Component = () => {
         <NotificationsSection />
 
         <SoundsSection />
+
+        <DictationSection />
 
         <UpdatesSection />
 
