@@ -1,5 +1,13 @@
 #!/usr/bin/env bun
 import { $ } from "bun"
+import path from "path"
+import { fileURLToPath } from "url"
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const desktopDir = path.resolve(__dirname, "..")
+
+process.chdir(desktopDir)
 
 import { downloadCliToResources, resolveChannel } from "./utils"
 

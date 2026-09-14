@@ -33,13 +33,16 @@ jobs:
         run: bun --cwd packages/app run build
 
       - name: Prebuild Desktop
-        run: bun --cwd packages/desktop run prebuild
+        working-directory: packages/desktop
+        run: bun run prebuild
 
       - name: Build Desktop
-        run: bun --cwd packages/desktop run build
+        working-directory: packages/desktop
+        run: bun run build
 
       - name: Package macOS
-        run: bun run --cwd packages/desktop package:mac
+        working-directory: packages/desktop
+        run: bun run package:mac
 
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@v4
