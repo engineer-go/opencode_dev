@@ -40,7 +40,8 @@ const getBase = (appId: string): Configuration => ({
   extraMetadata: {
     desktopName: `${appId}.desktop`,
   },
-  files: ["out/**/*", "resources/**/*", "!resources/opencode-cli*"],
+  files: ["out/**/*", "!out/**/*.map", "!out/**/*.d.ts", "resources/**/*", "!resources/opencode-cli*"],
+  electronLanguages: ["en"],
   extraResources: [
     ...(channel === "dev"
       ? [
@@ -89,7 +90,7 @@ const getBase = (appId: string): Configuration => ({
         StartupWMClass: appId,
       },
     },
-    target: ["AppImage", "deb", "rpm"],
+    target: ["deb"],
   },
 })
 
@@ -104,7 +105,6 @@ function getConfig() {
         appId,
         productName: "OpenCode Dev",
         deb: { fpm: [metainfoFpm(appId)] },
-        rpm: { packageName: "opencode-dev", fpm: [metainfoFpm(appId)] },
       }
     }
     case "beta": {
@@ -115,7 +115,6 @@ function getConfig() {
         protocols: { name: "OpenCode Beta", schemes: ["opencode"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
         deb: { fpm: [metainfoFpm(appId)] },
-        rpm: { packageName: "opencode-beta", fpm: [metainfoFpm(appId)] },
       }
     }
     case "prod": {
@@ -126,7 +125,6 @@ function getConfig() {
         protocols: { name: "OpenCode", schemes: ["opencode"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
         deb: { fpm: [metainfoFpm(appId), legacyDesktopEntryFpm] },
-        rpm: { packageName: "opencode", fpm: [metainfoFpm(appId), legacyDesktopEntryFpm] },
       }
     }
   }

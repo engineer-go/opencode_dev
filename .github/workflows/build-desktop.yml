@@ -1,13 +1,21 @@
 name: Build Desktop (macOS & Linux)
 
 on:
-  push:
-    branches:
-      - dev
-  pull_request:
-    branches:
-      - dev
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Target platform to build"
+        required: true
+        default: "macos"
+        type: choice
+        options:
+          - macos
+          - linux
+          - all
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -15,6 +23,7 @@ permissions:
 jobs:
   build-macos:
     name: Build macOS Desktop (arm64)
+    if: ${{ !inputs.platform || inputs.platform == 'macos' || inputs.platform == 'all' }}
     runs-on: macos-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -27,8 +36,24 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Cache node_modules
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('bun.lock') }}
+
       - name: Setup Bun & dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/setup-bun
+
+      - name: Setup Bun CLI
+        if: steps.node-modules-cache.outputs.cache-hit == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
 
       - name: Build App
         run: bun --cwd packages/app run build
@@ -55,7 +80,8 @@ jobs:
           if-no-files-found: error
 
   build-linux:
-    name: Build Linux Desktop (x86_64)
+    name: Build Linux Desktop (.deb)
+    if: ${{ inputs.platform == 'linux' || inputs.platform == 'all' }}
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -67,13 +93,24 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends rpm
+      - name: Cache node_modules
+        id: node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('bun.lock') }}
 
       - name: Setup Bun & dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/setup-bun
+
+      - name: Setup Bun CLI
+        if: steps.node-modules-cache.outputs.cache-hit == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
 
       - name: Build App
         run: bun --cwd packages/app run build
@@ -93,9 +130,6 @@ jobs:
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: opencode-desktop-linux-x64
-          path: |
-            packages/desktop/dist/*.AppImage
-            packages/desktop/dist/*.deb
-            packages/desktop/dist/*.rpm
+          name: opencode-desktop-linux-deb
+          path: packages/desktop/dist/*.deb
           if-no-files-found: error

@@ -95,7 +95,7 @@ const require = __cjs_mod__.createRequire(import.meta.url);
     publicDir: "../../../app/public",
     root: "src/renderer",
     build: {
-      sourcemap: true,
+      sourcemap: !!sentry,
       rollupOptions: {
         input: {
           main: "src/renderer/index.html",
