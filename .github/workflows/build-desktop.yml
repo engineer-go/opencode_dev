@@ -1,0 +1,51 @@
+name: Build Desktop (macOS)
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: Build macOS Desktop (arm64)
+    runs-on: macos-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+      NODE_OPTIONS: --max-old-space-size=4096
+      OPENCODE_CHANNEL: dev
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Bun & dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Build App
+        run: bun --cwd packages/app run build
+
+      - name: Prebuild Desktop
+        run: bun --cwd packages/desktop run prebuild
+
+      - name: Build Desktop
+        run: bun --cwd packages/desktop run build
+
+      - name: Package macOS
+        run: bun run --cwd packages/desktop package:mac
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-desktop-macos-arm64
+          path: |
+            packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
+          if-no-files-found: error
