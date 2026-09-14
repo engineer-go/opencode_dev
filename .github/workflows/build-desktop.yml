@@ -17,6 +17,7 @@ jobs:
     name: Build macOS Desktop (arm64)
     runs-on: macos-latest
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       CSC_IDENTITY_AUTO_DISCOVERY: false
       NODE_OPTIONS: --max-old-space-size=4096
       OPENCODE_CHANNEL: dev
