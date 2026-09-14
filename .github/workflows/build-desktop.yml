@@ -1,4 +1,4 @@
-name: Build Desktop (macOS)
+name: Build Desktop (macOS & Linux)
 
 on:
   push:
@@ -52,4 +52,50 @@ jobs:
           path: |
             packages/desktop/dist/*.dmg
             packages/desktop/dist/*.zip
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux Desktop (x86_64)
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      NODE_OPTIONS: --max-old-space-size=4096
+      OPENCODE_CHANNEL: dev
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm
+
+      - name: Setup Bun & dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Build App
+        run: bun --cwd packages/app run build
+
+      - name: Prebuild Desktop
+        working-directory: packages/desktop
+        run: bun run prebuild
+
+      - name: Build Desktop
+        working-directory: packages/desktop
+        run: bun run build
+
+      - name: Package Linux
+        working-directory: packages/desktop
+        run: bun run package:linux
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-desktop-linux-x64
+          path: |
+            packages/desktop/dist/*.AppImage
+            packages/desktop/dist/*.deb
+            packages/desktop/dist/*.rpm
           if-no-files-found: error
