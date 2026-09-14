@@ -75,18 +75,19 @@ const getBase = (appId: string): Configuration => ({
   mac: {
     category: "public.app-category.developer-tools",
     icon: `resources/icons/icon.icns`,
-    hardenedRuntime: true,
+    hardenedRuntime: false,
     gatekeeperAssess: false,
     entitlements: "resources/entitlements.plist",
     entitlementsInherit: "resources/entitlements.plist",
-    notarize: true,
+    identity: null,
+    notarize: false,
     target: ["dmg", "zip"],
     extendInfo: {
       NSMicrophoneUsageDescription: "OpenCode needs microphone access for voice dictation.",
     },
   },
   dmg: {
-    sign: true,
+    sign: false,
   },
   protocols: {
     name: "OpenCode",
