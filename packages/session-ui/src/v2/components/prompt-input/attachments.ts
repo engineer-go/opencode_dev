@@ -1,5 +1,6 @@
 import { onMount } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
+import { blobUrl } from "@opencode-ai/ui/blob-url"
 import type { PromptInputV2Attachment, PromptInputV2Prompt } from "./types"
 
 const accepted = [
@@ -103,7 +104,9 @@ export function createPromptInputV2Attachments(
       if (toast) input.warn()
       return false
     }
-    const blob = input.store ? await input.store(file) : await blobReference(file)
+    // Resolve the content id before creating an object URL so duplicate detection can
+    // reject the file without leaking a URL for content that is already attached.
+    const reference = input.store ? await input.store(file) : { id: await blobID(file) }
     const sourcePath = input.getPathForFile?.(file) || undefined
     // Native clipboard images arrive with a fresh timestamped filename on every paste, so identical
     // clipboard content is matched on bytes alone.
@@ -112,7 +115,7 @@ export function createPromptInputV2Attachments(
       .some(
         (part) =>
           part.type === "image" &&
-          part.blob.id === blob.id &&
+          part.blob.id === reference.id &&
           (sourcePath
             ? part.sourcePath === sourcePath
             : !part.sourcePath && (clipboard || part.filename === file.name)),
@@ -121,6 +124,7 @@ export function createPromptInputV2Attachments(
       input.duplicate()
       return true
     }
+    const blob = "url" in reference ? reference : { id: reference.id, url: blobUrl(reference.id, file) }
     const attachment: PromptInputV2Attachment = {
       type: "image",
       id: globalThis.crypto?.randomUUID?.() ?? Math.random().toString(16).slice(2),
@@ -221,11 +225,11 @@ export function createPromptInputV2Attachments(
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 
-async function blobReference(file: File) {
+async function blobID(file: File) {
   const id = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")
-  return { id, url: URL.createObjectURL(file) }
+  return id
 }
 const imageExtensions = new Map([
   ["gif", "image/gif"],

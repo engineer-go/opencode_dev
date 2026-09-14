@@ -1,4 +1,5 @@
 import type { AsyncStorage } from "@solid-primitives/storage"
+import { blobUrl, releaseBlobUrl, retainBlobUrl } from "@opencode-ai/ui/blob-url"
 
 export type BlobReference = { id: string; url: string }
 
@@ -11,14 +12,21 @@ type Driver = {
 }
 
 export type DraftStore = AsyncStorage & { putBlob(blob: Blob): Promise<BlobReference> }
-const urls = new Map<string, string>()
 
-function blobUrl(id: string, blob: Blob) {
-  const existing = urls.get(id)
-  if (existing) return existing
-  const url = URL.createObjectURL(blob)
-  urls.set(id, url)
-  return url
+function collectBlobIDs(value: unknown, into: Set<string>) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectBlobIDs(item, into)
+    return
+  }
+  if (!value || typeof value !== "object") return
+  const item = value as Record<string, unknown>
+  const blob = item.blob
+  if (blob && typeof blob === "object") {
+    const id = (blob as Record<string, unknown>).id
+    // Legacy references use the data URL itself as the id; those are never object URLs.
+    if (typeof id === "string" && !id.startsWith("data:")) into.add(id)
+  }
+  for (const entry of Object.values(item)) collectBlobIDs(entry, into)
 }
 
 async function blobID(blob: Blob) {
@@ -35,6 +43,27 @@ export async function createBlobReference(blob: Blob): Promise<BlobReference> {
 
 export function createDraftStore(driver: Driver): DraftStore {
   const versions = new Map<string, number>()
+  // Blob URLs are owned by the persisted item that references them. Tracking the ids
+  // held per key lets us retain on load/write and release exactly when they drop out,
+  // so an attachment that is still in a prompt never loses its URL to cache eviction.
+  const held = new Map<string, Set<string>>()
+  const reconcile = (key: string, value: unknown) => {
+    const next = new Set<string>()
+    collectBlobIDs(value, next)
+    const previous = held.get(key)
+    if (!previous && next.size === 0) return
+    if (previous) {
+      for (const id of previous) if (!next.has(id)) releaseBlobUrl(id)
+    }
+    for (const id of next) if (!previous?.has(id)) retainBlobUrl(id)
+    held.set(key, next)
+  }
+  const releaseKey = (key: string) => {
+    const previous = held.get(key)
+    if (!previous) return
+    for (const id of previous) releaseBlobUrl(id)
+    held.delete(key)
+  }
   const putBlob = async (blob: Blob) => {
     const id = await driver.putBlob(blob)
     return { id, url: blobUrl(id, blob) }
@@ -78,17 +107,26 @@ export function createDraftStore(driver: Driver): DraftStore {
   return {
     getItem: async (key) => {
       const value = await driver.get(key)
-      return value === null ? null : JSON.stringify(await decode(JSON.parse(value)))
+      if (value === null) {
+        releaseKey(key)
+        return null
+      }
+      const decoded = await decode(JSON.parse(value))
+      reconcile(key, decoded)
+      return JSON.stringify(decoded)
     },
     setItem: async (key, value) => {
       const version = (versions.get(key) ?? 0) + 1
       versions.set(key, version)
-      const encoded = JSON.stringify(await encode(JSON.parse(value)))
-      if (versions.get(key) === version) await driver.set(key, encoded)
+      const encoded = await encode(JSON.parse(value))
+      if (versions.get(key) !== version) return
+      await driver.set(key, JSON.stringify(encoded))
+      reconcile(key, encoded)
     },
     removeItem: async (key) => {
       versions.set(key, (versions.get(key) ?? 0) + 1)
       await driver.remove(key)
+      releaseKey(key)
     },
     putBlob,
   }

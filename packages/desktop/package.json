@@ -2,6 +2,7 @@
   "name": "@opencode-ai/desktop",
   "private": true,
   "version": "1.18.30",
+  "description": "AI-powered development tool",
   "type": "module",
   "license": "MIT",
   "homepage": "https://opencode.ai",

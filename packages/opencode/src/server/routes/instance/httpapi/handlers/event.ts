@@ -9,6 +9,8 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { EventApi } from "../groups/event"
 
+const subscriberCapacity = 1024
+
 function eventData(data: unknown): Sse.Event {
   return {
     _tag: "Event",
@@ -26,12 +28,11 @@ function eventResponse(events: EventV2.Interface) {
   return Effect.gen(function* () {
     const instance = yield* InstanceState.context
     const workspaceID = yield* InstanceState.workspaceID
-    // Listener registration is eager, so events published after this point cannot
-    // be lost while the HTTP body fiber is starting or emitting server.connected.
-    const queue = yield* Queue.unbounded<EventV2.Payload>()
-    const unsubscribe = yield* events.listen((event) => Effect.sync(() => Queue.offerUnsafe(queue, event)))
-    yield* Effect.addFinalizer(() => unsubscribe)
-    const stream = Stream.fromQueue(queue).pipe(
+    // A bounded subscriber stream fails instead of buffering without limit when a
+    // slow client cannot keep up; the client reconnects and resyncs. Acquiring the
+    // stream installs its listener eagerly, so events published after this point
+    // cannot be lost while the HTTP body fiber is starting server.connected.
+    const stream = (yield* EventV2.allBounded(events, subscriberCapacity)).pipe(
       Stream.filter(
         (event) =>
           event.location?.directory === instance.directory &&

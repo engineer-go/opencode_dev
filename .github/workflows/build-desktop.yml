@@ -68,7 +68,7 @@ jobs:
 
       - name: Package macOS
         working-directory: packages/desktop
-        run: bun run package:mac
+        run: bun run package:mac --publish never
 
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@v4
@@ -125,7 +125,7 @@ jobs:
 
       - name: Package Linux
         working-directory: packages/desktop
-        run: bun run package:linux
+        run: bun run package:linux --publish never
 
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4

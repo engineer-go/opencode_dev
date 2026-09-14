@@ -105,6 +105,21 @@ function snapshot(job: Active): Info {
   }
 }
 
+// Finished jobs stay queryable so late `wait`/`get` callers can observe their
+// result, but their full output is retained per entry. Keep only the most recent
+// finished jobs and drop the rest so a long-lived registry cannot grow forever.
+const MAX_FINISHED_JOBS = 100
+
+function pruneFinished(jobs: Map<string, Active>) {
+  const finished = Array.from(jobs.values())
+    .filter((job) => job.info.status !== "running")
+    .toSorted((a, b) => (a.info.completed_at ?? a.info.started_at) - (b.info.completed_at ?? b.info.started_at))
+  const excess = finished.length - MAX_FINISHED_JOBS
+  if (excess <= 0) return jobs
+  for (const job of finished.slice(0, excess)) jobs.delete(job.info.id)
+  return jobs
+}
+
 function errorText(error: unknown) {
   if (error instanceof Error) return error.message
   return String(error)
@@ -161,7 +176,7 @@ export const make = Effect.gen(function* () {
           ...(Exit.isFailure(exit) ? { error: errorText(Cause.squash(exit.cause)) } : {}),
         },
       }
-      return [{ info: snapshot(next), done: job.done, scope: job.scope }, new Map(jobs).set(id, next)]
+      return [{ info: snapshot(next), done: job.done, scope: job.scope }, pruneFinished(new Map(jobs).set(id, next))]
     })
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info).pipe(Effect.ignore)
     if (result.scope) {
@@ -350,7 +365,7 @@ export const make = Effect.gen(function* () {
           completed_at,
         },
       }
-      return [{ info: snapshot(next), done: job.done, scope: job.scope }, new Map(jobs).set(id, next)]
+      return [{ info: snapshot(next), done: job.done, scope: job.scope }, pruneFinished(new Map(jobs).set(id, next))]
     })
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info).pipe(Effect.ignore)
     if (result.scope) yield* Scope.close(result.scope, Exit.void)
