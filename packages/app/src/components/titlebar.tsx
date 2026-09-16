@@ -647,6 +647,8 @@ function TitlebarUpdateIconButton(props: { state: TitlebarUpdatePillState }) {
 
 function ChannelIndicator(props: { debugTools?: { visible: boolean; toggle: () => void } }) {
   const channel = import.meta.env.VITE_OPENCODE_CHANNEL
+  const build = import.meta.env.VITE_OPENCODE_BUILD
+  const devLabel = build ? `DEV ${build}` : "DEV"
   if (channel === "dev" && props.debugTools) {
     return (
       <button
@@ -656,7 +658,7 @@ function ChannelIndicator(props: { debugTools?: { visible: boolean; toggle: () =
         aria-label="Toggle debug tools"
         aria-pressed={props.debugTools.visible}
       >
-        DEV
+        {devLabel}
       </button>
     )
   }
@@ -665,7 +667,7 @@ function ChannelIndicator(props: { debugTools?: { visible: boolean; toggle: () =
     <>
       {["beta", "dev"].includes(channel) && (
         <div class="bg-icon-interactive-base text-[#FFF] font-medium px-2 rounded-sm uppercase font-mono">
-          {channel.toUpperCase()}
+          {channel === "dev" ? devLabel : channel.toUpperCase()}
         </div>
       )}
     </>

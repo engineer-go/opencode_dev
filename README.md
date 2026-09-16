@@ -9,12 +9,8 @@
 </p>
 <p align="center">The open source AI coding agent.</p>
 <p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
   <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
 </p>
-
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
 
 ---
 
@@ -22,7 +18,6 @@
 
 ```bash
 # YOLO
-curl -fsSL https://opencode.ai/install | bash
 
 # Package managers
 npm i -g opencode-ai@latest        # or bun/pnpm/yarn
@@ -41,14 +36,11 @@ nix run nixpkgs#opencode           # or github:anomalyco/opencode for latest dev
 
 ### Desktop App (BETA)
 
-OpenCode is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/opencode/releases) or [opencode.ai/download](https://opencode.ai/download).
-
-| Platform              | Download                           |
-| --------------------- | ---------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-mac-arm64.dmg`   |
-| macOS (Intel)         | `opencode-desktop-mac-x64.dmg`     |
-| Windows               | `opencode-desktop-windows-x64.exe` |
-| Linux                 | `.deb`, `.rpm`, or `.AppImage`     |
+| Platform              | Download                         |
+| --------------------- | -------------------------------- |
+| macOS (Apple Silicon) | `opencode-desktop-mac-arm64.dmg` |
+| macOS (Intel)         | `opencode-desktop-mac-x64.dmg`   |
+| Linux                 | `.deb`, `.rpm`, or `.AppImage`   |
 
 ```bash
 # macOS (Homebrew)
@@ -57,9 +49,38 @@ brew install --cask opencode-desktop
 scoop bucket add extras; scoop install extras/opencode-desktop
 ```
 
+#### Building From Source
+
+Requires [Bun](https://bun.sh) `1.3.x` or newer. On macOS, install the Xcode command line tools first (`xcode-select --install`).
+
+```bash
+# Install workspace dependencies (run from the repo root)
+bun install
+
+# Run the desktop app in development
+bun run dev:desktop
+
+# Build the app's JS assets, then bundle it into dist/
+bun run --cwd packages/desktop build
+bun run --cwd packages/desktop package:mac    # or package:linux on Linux
+```
+
+Artifacts land in `packages/desktop/dist/`:
+
+- macOS: `mac-arm64/OpenCode Dev.app`, `opencode-desktop-mac-arm64.dmg`, `opencode-desktop-mac-arm64.zip`
+- Linux: `opencode-desktop-linux-<arch>.deb`
+
+Local builds default to the `dev` channel, so the app is named **OpenCode Dev** and the titlebar shows a `DEV <build>` stamp to tell builds apart. Set `OPENCODE_CHANNEL=dev|beta|prod` to change the channel and `OPENCODE_BUILD=<label>` to override the stamp.
+
+Local builds are unsigned, so macOS Gatekeeper blocks the first launch. Open the app once from Finder with **Open**, or clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine "packages/desktop/dist/mac-arm64/OpenCode Dev.app"
+```
+
 #### Installation Directory
 
-The install script respects the following priority order for the installation path:
+The installation script respects the following priority order for the installation path:
 
 1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
 2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
@@ -86,19 +107,3 @@ Also included is a **general** subagent for complex searches and multistep tasks
 This is used internally and can be invoked using `@general` in messages.
 
 Learn more about [agents](https://opencode.ai/docs/agents).
-
-### Documentation
-
-For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
-
-### Contributing
-
-If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
-
-### Building on OpenCode
-
-If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
-
----
-
-**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
