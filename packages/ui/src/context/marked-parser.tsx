@@ -7,6 +7,8 @@ export function createMarkdownParser(highlight: (code: string, language: string)
     {
       renderer: {
         link({ href, title, text }) {
+          // Emails and package scopes are rendered as plain text; only web links stay openable.
+          if (href.toLowerCase().startsWith("mailto:")) return text
           const titleAttr = title ? ` title="${title}"` : ""
           return `<a href="${href}"${titleAttr} class="external-link" target="_blank" rel="noopener noreferrer">${text}</a>`
         },

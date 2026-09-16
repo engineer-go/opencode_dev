@@ -9,6 +9,11 @@ test("renders links with application attributes", async () => {
   )
 })
 
+test("renders email autolinks as plain text", async () => {
+  expect(await parser.parse("bun@1.3.14")).toBe("<p>bun@1.3.14</p>\n")
+  expect(await parser.parse("reach me at user@example.com")).toBe("<p>reach me at user@example.com</p>\n")
+})
+
 test("renders inline and block math", async () => {
   expect(await parser.parse("\\(x^2\\)")).toContain('<span class="katex">')
   expect(await parser.parse("$$\nx^2\n$$\n")).toContain('<span class="katex-display">')

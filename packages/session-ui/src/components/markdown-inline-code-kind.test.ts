@@ -16,6 +16,22 @@ describe("inlineCodeKind", () => {
     expect(inlineCodeKind(`1.2`)).toBeUndefined()
   })
 
+  test("ignores bare words and partial names that are not paths", () => {
+    expect(inlineCodeKind(`build`)).toBeUndefined()
+    expect(inlineCodeKind(`.md`)).toBeUndefined()
+    expect(inlineCodeKind(`.js`)).toBeUndefined()
+    expect(inlineCodeKind(`profile`)).toBeUndefined()
+    expect(inlineCodeKind(`hosts`)).toBeUndefined()
+    expect(inlineCodeKind(`gradlew`)).toBeUndefined()
+  })
+
+  test("ignores emails and package scopes", () => {
+    expect(inlineCodeKind(`bun@1.3.14`)).toBeUndefined()
+    expect(inlineCodeKind(`user@example.com`)).toBeUndefined()
+    expect(inlineCodeKind(`@opencode-ai/app`)).toBeUndefined()
+    expect(inlineCodeKind(`@scope/pkg`)).toBeUndefined()
+  })
+
   test("detects file and directory paths", () => {
     expect(inlineCodeKind(`app.tsx`)).toBe("path")
     expect(inlineCodeKind(`vite.config.mjs`)).toBe("path")
@@ -25,7 +41,10 @@ describe("inlineCodeKind", () => {
     expect(inlineCodeKind(`schema.graphql`)).toBe("path")
     expect(inlineCodeKind(`Dockerfile`)).toBe("path")
     expect(inlineCodeKind(`Dockerfile.dev`)).toBe("path")
+    expect(inlineCodeKind(`dockerfile`)).toBe("path")
+    expect(inlineCodeKind(`justfile`)).toBe("path")
     expect(inlineCodeKind(`.gitignore`)).toBe("path")
+    expect(inlineCodeKind(`.env`)).toBe("path")
     expect(inlineCodeKind(`Cargo.lock`)).toBe("path")
     expect(inlineCodeKind(`go.sum`)).toBe("path")
     expect(inlineCodeKind(`bun.lockb`)).toBe("path")
@@ -33,8 +52,17 @@ describe("inlineCodeKind", () => {
     expect(inlineCodeKind(`pnpm-lock.yaml`)).toBe("path")
     expect(inlineCodeKind(`packages/desktop-electron`)).toBe("path")
     expect(inlineCodeKind(`~/.config/opencode`)).toBe("path")
-    expect(inlineCodeKind(`@opencode-ai/app`)).toBe("path")
     expect(inlineCodeKind(`session/status`)).toBe("path")
+    expect(inlineCodeKind(`packages/desktop/dist/`)).toBe("path")
+    expect(inlineCodeKind(`native/`)).toBe("path")
+  })
+
+  test("detects paths containing spaces", () => {
+    expect(inlineCodeKind(`packages/desktop/dist/mac-arm64/OpenCode Dev.app`)).toBe("path")
+    expect(inlineCodeKind(`/Applications/Visual Studio Code.app`)).toBe("path")
+    expect(inlineCodeKind(`~/My Documents/notes.md`)).toBe("path")
+    expect(inlineCodeKind(`some words here`)).toBeUndefined()
+    expect(inlineCodeKind(`read the docs/guide`)).toBeUndefined()
   })
 
   test("detects urls", () => {

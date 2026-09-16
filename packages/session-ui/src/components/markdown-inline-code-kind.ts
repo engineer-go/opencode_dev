@@ -1888,28 +1888,73 @@ const pathFileNamePrefixes = new Set([
   "zshrc",
 ])
 
+// Dotfiles that Linguist tracks as languages/extensions rather than filenames, so they
+// are absent from the generated list above but are still real, openable files.
+const extraPathFileNames = new Set([
+  ".editorconfig",
+  ".env",
+  ".gitignore",
+  ".gitkeep",
+  ".nvmrc",
+  ".prettierrc",
+  ".vimrc",
+  ".yarnrc",
+])
+
+// Common lowercase words that collide with real filenames ("build") or merely end in
+// "file" ("profile"); treat them as prose rather than paths.
+const nonFilePathNames = new Set(["build", "profile"])
+
 export function inlineCodeKind(text: string): "path" | "url" | undefined {
   if (/^https?:\/\//i.test(text)) return "url"
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return
   if (text === "/") return
   if (/^\/[a-z][a-z0-9-]*$/i.test(text)) return
-  if (/\s/.test(text)) return
-  if (/[()\[\]{}*+=<>|&^"';]/.test(text)) return
-  if (/[/\\]/.test(text) || /^\.\.?[/\\]/.test(text) || hasPathExtension(text) || hasPathFileName(text)) return "path"
+  // `@` covers emails and package scopes, which are not openable paths here.
+  if (/[()\[\]{}*+=<>|&^"';@]/.test(text)) return
+  if (!hasPathShape(text)) return
+  return "path"
+}
+
+function hasPathShape(text: string) {
+  const value = text.trim()
+  if (!value) return false
+  if (/\s/.test(value)) {
+    // Paths may contain spaces (app bundles, "My Documents"). Only keep them when a
+    // separator plus a recognizable final component makes the intent unambiguous.
+    return (
+      /[/\\]/.test(value) && (hasPathExtension(value) || value.endsWith("/") || hasPathFileName(lastSegment(value)))
+    )
+  }
+  if (/[/\\]/.test(value)) return true
+  return hasPathExtension(value) || hasPathFileName(value)
+}
+
+function lastSegment(value: string) {
+  const parts = value.split(/[/\\]/)
+  return parts[parts.length - 1] ?? ""
 }
 
 function hasPathExtension(text: string) {
   const value = text.toLowerCase()
   if (value.endsWith(".d.ts")) return true
   const index = value.lastIndexOf(".")
-  if (index === -1) return false
+  // A leading dot (".md", ".env") is an extension-less token, not a file path.
+  if (index <= 0) return false
   return pathExtensions.has(value.slice(index + 1))
 }
 
 function hasPathFileName(text: string) {
   const value = text.toLowerCase()
-  if (pathFileNames.has(value)) return true
-  const index = value.indexOf(".")
-  if (index === -1) return false
-  return pathFileNamePrefixes.has(value.slice(0, index))
+  if (nonFilePathNames.has(value)) return false
+  const prefixIndex = value.indexOf(".")
+  const matches =
+    pathFileNames.has(value) ||
+    extraPathFileNames.has(value) ||
+    (prefixIndex > 0 && pathFileNamePrefixes.has(value.slice(0, prefixIndex)))
+  if (!matches) return false
+  // Bare lowercase words ("build", "profile", "hosts") collide with prose. Require a
+  // dotted name, capitalization, or a "*file" suffix to stay confident.
+  if (value.includes(".") || /[A-Z]/.test(text) || /file$/.test(value)) return true
+  return false
 }
