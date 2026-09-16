@@ -32,6 +32,7 @@ import { markdownBlockKey, type MarkdownToken } from "./markdown-worker-protocol
 import { shouldResetCodeTokens, type RenderedCodeState } from "./markdown-code-state"
 import { getCachedMarkdown, sanitizeMarkdown, touchCachedMarkdown, type MarkdownCacheEntry } from "./markdown-cache"
 import { inlineCodeKind } from "./markdown-inline-code-kind"
+import { useFileActions } from "../context"
 
 type RenderedBlock =
   | (MarkdownCacheEntry & { key: string; mode: Exclude<Block["mode"], "code"> })
@@ -330,6 +331,27 @@ function setupCodeCopy(root: HTMLDivElement, getLabels: () => CopyLabels) {
   }
 }
 
+function setupPathLinks(root: HTMLDivElement, getReveal: () => ((path: string) => void) | undefined) {
+  const handleClick = (event: MouseEvent) => {
+    if (event.defaultPrevented) return
+    const target = event.target
+    if (!(target instanceof Element)) return
+    const code = target.closest('code[data-inline-code-kind="path"]')
+    if (!(code instanceof HTMLElement)) return
+    const path = code.textContent?.trim() ?? ""
+    if (!path) return
+    const reveal = getReveal()
+    if (!reveal) return
+    // Ignore the click that completes a text selection so copy/drag still works.
+    if (window.getSelection()?.isCollapsed === false) return
+    event.preventDefault()
+    reveal(path)
+  }
+
+  root.addEventListener("click", handleClick)
+  return () => root.removeEventListener("click", handleClick)
+}
+
 function initialResult(text: string, key: string | undefined, projection: Projection, owner: string): RenderResult {
   if (!text) return { text, blocks: [] }
   const base = key ?? checksum(text)
@@ -372,6 +394,7 @@ export function Markdown(
 ) {
   const [local, others] = splitProps(props, ["text", "cacheKey", "streaming", "class", "classList"])
   const i18n = useI18n()
+  const fileActions = useFileActions()
   const [root, setRoot] = createSignal<HTMLDivElement>()
   const owner = createUniqueId()
   const activeCodeKeys = new Set<string>()
@@ -491,6 +514,7 @@ export function Markdown(
   )
 
   let copyCleanup: (() => void) | undefined
+  let pathCleanup: (() => void) | undefined
 
   createEffect(() => {
     const container = root()
@@ -499,6 +523,9 @@ export function Markdown(
     const content = local.text ? pendingBlocks(result, projected, local.cacheKey, owner) : []
     if (!container) return
     if (isServer) return
+    if (fileActions.revealPath) container.dataset.fileActions = "reveal"
+    else delete container.dataset.fileActions
+    if (!pathCleanup) pathCleanup = setupPathLinks(container, () => fileActions.revealPath)
     if (content.length === 0) {
       disposeCopyButtons(container)
       container.innerHTML = ""
@@ -534,6 +561,7 @@ export function Markdown(
 
   onCleanup(() => {
     if (copyCleanup) copyCleanup()
+    if (pathCleanup) pathCleanup()
     disposeMarkdownProjection(owner)
     activeCodeKeys.forEach(disposeCode)
     completedCode.clear()

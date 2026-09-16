@@ -1,4 +1,4 @@
-import { DataProvider } from "@opencode-ai/session-ui/context"
+import { DataProvider, FileActionsProvider } from "@opencode-ai/session-ui/context"
 import { showToast } from "@/utils/toast"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
@@ -12,6 +12,8 @@ import { Schema } from "effect"
 import type { ServerConnection } from "@/context/server"
 import { sessionHref } from "@/utils/session-route"
 import { useServerSync } from "@/context/server-sync"
+import { usePlatform } from "@/context/platform"
+import { resolveRevealPath } from "@/utils/reveal-path"
 
 export function DirectoryDataProvider(
   props: ParentProps<{
@@ -23,6 +25,7 @@ export function DirectoryDataProvider(
   const location = useLocation()
   const navigate = useNavigate()
   const params = useParams()
+  const platform = usePlatform()
   const sync = useSync()
   const serverSync = useServerSync()
   const directory = () => (typeof props.directory === "function" ? props.directory() : props.directory)
@@ -31,6 +34,10 @@ export function DirectoryDataProvider(
     const server = props.server?.()
     if (server) return sessionHref(server, sessionID)
     return `/${slug()}/session/${sessionID}`
+  }
+  const revealPath = (path: string) => {
+    if (!platform.revealPath) return
+    void platform.revealPath(resolveRevealPath(path, directory(), sync().data.path.home))
   }
 
   createEffect(() => {
@@ -67,7 +74,9 @@ export function DirectoryDataProvider(
           onNavigateToSession={(sessionID: string) => navigate(href(sessionID))}
           onSessionHref={href}
         >
-          <LocalProvider>{props.children}</LocalProvider>
+          <FileActionsProvider revealPath={platform.revealPath ? revealPath : undefined}>
+            <LocalProvider>{props.children}</LocalProvider>
+          </FileActionsProvider>
         </DataProvider>
       )}
     </Show>
