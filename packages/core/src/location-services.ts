@@ -40,6 +40,7 @@ import { TypeSafeClient } from "./typesafe/client"
 import { SkillSuggestion } from "./typesafe/skill-suggestion"
 import { SearchRerank } from "./typesafe/search-rerank"
 import { SemanticFind } from "./typesafe/semantic-find"
+import { TypeSafeGuardrail } from "./typesafe/guardrail"
 
 export { LocationServiceMap } from "./location-service-map"
 
@@ -77,6 +78,7 @@ export const locationServices = LayerNode.group([
   SkillSuggestion.node,
   SearchRerank.node,
   SemanticFind.node,
+  TypeSafeGuardrail.node,
   SessionTodo.node,
   QuestionV2.node,
   ReadToolFileSystem.node,

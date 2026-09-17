@@ -12,6 +12,7 @@ import { collectBoundedResponseBody } from "./http-body"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { TypeSafeGuardrail } from "../typesafe/guardrail"
 
 export const name = "webfetch"
 export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -120,6 +121,7 @@ const layer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const http = yield* HttpClient.HttpClient
     const permission = yield* PermissionV2.Service
+    const guardrail = yield* TypeSafeGuardrail.Service
 
     yield* tools
       .register({
@@ -163,15 +165,19 @@ const layer = Layer.effectDiscard(
                 }),
               )
               const content = new TextDecoder().decode(body)
-              const output = yield* Effect.try({
+              const converted = yield* Effect.try({
                 try: () => convert(content, contentType, input.format),
                 catch: (error) => error,
+              })
+              const sanitized = yield* guardrail.sanitizeContent({
+                content: converted,
+                source: input.url,
               })
               return {
                 url: input.url,
                 contentType,
                 format: input.format,
-                output,
+                output: sanitized.sanitizedContent,
               }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to fetch ${input.url}` }))),
         }),
@@ -183,7 +189,7 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/webfetch",
   layer,
-  deps: [ToolRegistry.node, PermissionV2.node, LayerNodePlatform.httpClient],
+  deps: [ToolRegistry.node, PermissionV2.node, LayerNodePlatform.httpClient, TypeSafeGuardrail.node],
 })
 
 export function extractTextFromHTML(html: string) {

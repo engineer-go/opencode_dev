@@ -14,6 +14,7 @@ import { PositiveInt } from "../schema"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { TypeSafeGuardrail } from "../typesafe/guardrail"
 
 export const name = "bash"
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
@@ -102,6 +103,7 @@ const layer = Layer.effectDiscard(
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
     const permission = yield* PermissionV2.Service
+    const guardrail = yield* TypeSafeGuardrail.Service
 
     yield* tools
       .register({
@@ -139,6 +141,26 @@ const layer = Layer.effectDiscard(
                 (directory) =>
                   `Command argument references external directory ${path.join(directory, "*").replaceAll("\\", "/")}. Bash runs with host-user filesystem, process, and network authority; this scan is advisory only.`,
               )
+
+              const assessment = yield* guardrail.evaluateCommand({
+                command: input.command,
+                workdir: target.canonical,
+              })
+
+              if (assessment.decision === "block") {
+                return yield* Effect.fail(
+                  new Error(
+                    `Command execution blocked by TypeSafe Guardrail (severity: ${assessment.severity}). Reason: ${assessment.reasons.join("; ")}`,
+                  ),
+                )
+              }
+
+              if (assessment.decision === "review" && assessment.reasons.length > 0) {
+                warnings.push(
+                  `TypeSafe Guardrail Advisory: Command classified with operational hazard (${assessment.reasons.join("; ")}).`,
+                )
+              }
+
               yield* permission.assert({
                 action: name,
                 resources: [input.command],
@@ -193,7 +215,15 @@ const layer = Layer.effectDiscard(
                 truncated: result.outputTruncated === true,
                 ...(warnings.length ? { warnings } : {}),
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to execute command: ${input.command}` }))),
+            }).pipe(
+              Effect.mapError((error) =>
+                error instanceof ToolFailure
+                  ? error
+                  : new ToolFailure({
+                      message: error instanceof Error ? error.message : `Unable to execute command: ${input.command}`,
+                    }),
+              ),
+            ),
         }),
       })
       .pipe(Effect.orDie)
@@ -203,5 +233,13 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/bash",
   layer,
-  deps: [ToolRegistry.node, LocationMutation.node, FSUtil.node, AppProcess.node, Config.node, PermissionV2.node],
+  deps: [
+    ToolRegistry.node,
+    LocationMutation.node,
+    FSUtil.node,
+    AppProcess.node,
+    Config.node,
+    PermissionV2.node,
+    TypeSafeGuardrail.node,
+  ],
 })
