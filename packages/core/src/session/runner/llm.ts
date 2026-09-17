@@ -21,6 +21,8 @@ import { QuestionV2 } from "../../question"
 import { SystemContext } from "../../system-context/index"
 import { SystemContextRegistry } from "../../system-context/registry"
 import { SkillGuidance } from "../../skill/guidance"
+import { SkillV2 } from "../../skill"
+import { SkillSuggestion } from "../../typesafe/skill-suggestion"
 import { ReferenceGuidance } from "../../reference/guidance"
 import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
@@ -29,6 +31,7 @@ import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service } from "./index"
@@ -103,6 +106,8 @@ const layer = Layer.effect(
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
     const referenceGuidance = yield* ReferenceGuidance.Service
+    const skills = yield* SkillV2.Service
+    const skillSuggestion = yield* SkillSuggestion.Service
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
     const db = (yield* Database.Service).db
@@ -199,6 +204,12 @@ const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const latestUser = context.findLast((msg): msg is SessionMessage.User => msg.type === "user")
+      const permittedSkills = agent.info ? SkillV2.available(yield* skills.list(), agent.info) : []
+      const suggestedSkill =
+        latestUser?.text && permittedSkills.length > 0
+          ? yield* skillSuggestion.suggest({ request: latestUser.text, skills: permittedSkills })
+          : undefined
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
@@ -212,7 +223,11 @@ const layer = Layer.effect(
           },
         },
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline]
+        system: [
+          agent.info?.system,
+          system.baseline,
+          suggestedSkill ? SkillSuggestion.suggestionBlock(suggestedSkill) : undefined,
+        ]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
         messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
@@ -432,6 +447,8 @@ export const node = makeLocationNode({
     SystemContextRegistry.node,
     SkillGuidance.node,
     ReferenceGuidance.node,
+    SkillV2.node,
+    SkillSuggestion.node,
     Config.node,
     Snapshot.node,
     Database.node,

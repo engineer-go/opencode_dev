@@ -36,6 +36,8 @@ import { BuiltInTools } from "./tool/builtins"
 import { ReadToolFileSystem } from "./tool/read-filesystem"
 import { ToolRegistry } from "./tool/registry"
 import { ToolOutputStore } from "./tool-output-store"
+import { TypeSafeClient } from "./typesafe/client"
+import { SkillSuggestion } from "./typesafe/skill-suggestion"
 
 export { LocationServiceMap } from "./location-service-map"
 
@@ -69,6 +71,8 @@ export const locationServices = LayerNode.group([
   Image.node,
   SkillGuidance.node,
   ReferenceGuidance.node,
+  TypeSafeClient.node,
+  SkillSuggestion.node,
   SessionTodo.node,
   QuestionV2.node,
   ReadToolFileSystem.node,
