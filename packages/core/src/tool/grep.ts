@@ -10,6 +10,7 @@ import { Location } from "../location"
 import { PermissionV2 } from "../permission"
 import { Ripgrep } from "../ripgrep"
 import { RelativePath } from "../schema"
+import { SearchRerank } from "../typesafe/search-rerank"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -28,6 +29,9 @@ export const Input = Schema.Struct({
   }),
   limit: FileSystem.GrepInput.fields.limit.annotate({
     description: "Maximum matches to return",
+  }),
+  query: Schema.optional(Schema.String).annotate({
+    description: "Optional natural language intent to re-rank matches by semantic relevance using TypeSafe (e.g. 'JWT expiration handler')",
   }),
 })
 
@@ -57,12 +61,13 @@ const layer = Layer.effectDiscard(
     const ripgrep = yield* Ripgrep.Service
     const location = yield* Location.Service
     const permission = yield* PermissionV2.Service
+    const searchRerank = yield* SearchRerank.Service
 
     yield* tools
       .register({
         [name]: Tool.make({
           description:
-            "Search file contents by regular expression within the active Location or an absolute managed tool-output file. Use a path to narrow the search, include to filter files by glob, and limit to bound the match count. Returns concise file resources, line numbers, and bounded line previews.",
+            "Search file contents by regular expression within the active Location or an absolute managed tool-output file. Use a path to narrow the search, include to filter files by glob, limit to bound the match count, and query to semantically re-rank results using TypeSafe. Returns concise file resources, line numbers, and bounded line previews.",
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [
@@ -87,6 +92,7 @@ const layer = Layer.effectDiscard(
                   path: input.path,
                   include: input.include,
                   limit: input.limit,
+                  query: input.query,
                 },
                 sessionID: context.sessionID,
                 agent: context.agent,
@@ -94,7 +100,7 @@ const layer = Layer.effectDiscard(
               })
               const target = path.resolve(location.directory, input.path ?? ".")
               const info = yield* fs.stat(target).pipe(Effect.catch(() => Effect.succeed(undefined)))
-              return yield* ripgrep
+              const result = yield* ripgrep
                 .grep({
                   cwd: info?.type === "Directory" ? target : path.dirname(target),
                   pattern: input.pattern,
@@ -102,27 +108,34 @@ const layer = Layer.effectDiscard(
                   include: input.include,
                   limit: input.limit ?? Number.MAX_SAFE_INTEGER,
                 })
-                .pipe(
-                  Effect.map((result) =>
-                    result.map((match) =>
-                      FileSystem.Match.make({
-                        ...match,
-                        entry: FileSystem.Entry.make({
-                          ...match.entry,
-                          path: RelativePath.make(
-                            path.relative(
-                              location.directory,
-                              path.resolve(
-                                info?.type === "Directory" ? target : path.dirname(target),
-                                match.entry.path,
-                              ),
-                            ),
-                          ),
-                        }),
-                      }),
+              const matches = result.map((match) =>
+                FileSystem.Match.make({
+                  ...match,
+                  entry: FileSystem.Entry.make({
+                    ...match.entry,
+                    path: RelativePath.make(
+                      path.relative(
+                        location.directory,
+                        path.resolve(
+                          info?.type === "Directory" ? target : path.dirname(target),
+                          match.entry.path,
+                        ),
+                      ),
                     ),
-                  ),
-                )
+                  }),
+                }),
+              )
+
+              const query = input.query?.trim() || (matches.length > 5 ? input.pattern : undefined)
+              if (query && matches.length > 1) {
+                const ranked = yield* searchRerank.rerank({
+                  query,
+                  matches,
+                })
+                return ranked.map((r) => r.match)
+              }
+
+              return matches
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to grep for ${input.pattern}` }))),
         }),
       })
@@ -133,5 +146,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/grep",
   layer,
-  deps: [ToolRegistry.node, FSUtil.node, Ripgrep.node, Location.node, PermissionV2.node],
+  deps: [ToolRegistry.node, FSUtil.node, Ripgrep.node, Location.node, PermissionV2.node, SearchRerank.node],
 })
