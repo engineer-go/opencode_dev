@@ -4,6 +4,8 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Config } from "@opencode-ai/core/config"
 import { TypeSafeClient } from "@opencode-ai/core/typesafe/client"
 import { SkillSuggestion } from "@opencode-ai/core/typesafe/skill-suggestion"
+import { Integration } from "@opencode-ai/core/integration"
+import { Credential } from "@opencode-ai/core/credential"
 import {
   ChoiceAnswer,
   NoulAnswer,
@@ -46,6 +48,27 @@ describe("TypeSafeClient", () => {
     }
   })
 
+  const mockIntegration = (key?: string) =>
+    Layer.succeed(
+      Integration.Service,
+      Integration.Service.of({
+        connection: {
+          active: () =>
+            Effect.succeed(
+              key
+                ? {
+                    type: "credential" as const,
+                    id: Credential.ID.make("c_1"),
+                    label: "default",
+                  }
+                : undefined,
+            ),
+          resolve: () =>
+            Effect.succeed(key ? Credential.Key.make({ type: "key", key }) : undefined),
+        } as unknown as Integration.Interface["connection"],
+      } as unknown as Integration.Interface),
+    )
+
   test("reports isConfigured = false when no key is set", async () => {
     delete process.env.TYPESAFE_API_KEY
     const configLayer = Layer.succeed(
@@ -58,7 +81,11 @@ describe("TypeSafeClient", () => {
     const program = Effect.gen(function* () {
       const client = yield* TypeSafeClient.Service
       return yield* client.isConfigured()
-    }).pipe(Effect.provide(TypeSafeClient.locationLayer), Effect.provide(configLayer))
+    }).pipe(
+      Effect.provide(TypeSafeClient.locationLayer),
+      Effect.provide(configLayer),
+      Effect.provide(mockIntegration()),
+    )
 
     const isConfigured = await Effect.runPromise(program)
     expect(isConfigured).toBe(false)
@@ -76,7 +103,33 @@ describe("TypeSafeClient", () => {
     const program = Effect.gen(function* () {
       const client = yield* TypeSafeClient.Service
       return yield* client.isConfigured()
-    }).pipe(Effect.provide(TypeSafeClient.locationLayer), Effect.provide(configLayer))
+    }).pipe(
+      Effect.provide(TypeSafeClient.locationLayer),
+      Effect.provide(configLayer),
+      Effect.provide(mockIntegration()),
+    )
+
+    const isConfigured = await Effect.runPromise(program)
+    expect(isConfigured).toBe(true)
+  })
+
+  test("reports isConfigured = true when saved in Integration (e.g. via Settings -> Providers)", async () => {
+    delete process.env.TYPESAFE_API_KEY
+    const configLayer = Layer.succeed(
+      Config.Service,
+      Config.Service.of({
+        entries: () => Effect.succeed([]),
+      }),
+    )
+
+    const program = Effect.gen(function* () {
+      const client = yield* TypeSafeClient.Service
+      return yield* client.isConfigured()
+    }).pipe(
+      Effect.provide(TypeSafeClient.locationLayer),
+      Effect.provide(configLayer),
+      Effect.provide(mockIntegration("ts_saved_key_from_settings")),
+    )
 
     const isConfigured = await Effect.runPromise(program)
     expect(isConfigured).toBe(true)

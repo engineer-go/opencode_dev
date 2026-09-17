@@ -5,6 +5,7 @@ import { httpClient } from "../effect/app-node-platform"
 import { Context, Effect, Layer, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "../config"
+import { Integration } from "../integration"
 import { SystemOneRequest, SystemOneResponse } from "./types"
 
 export class TypeSafeError extends Schema.TaggedErrorClass<TypeSafeError>()("TypeSafeError", {
@@ -26,13 +27,30 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const config = yield* Config.Service
     const http = yield* HttpClient.HttpClient
+    const integrations = yield* Integration.Service
 
     const getCredentials = Effect.gen(function* () {
       const entries = yield* config.entries()
       const cfg = Config.latest(entries, "typesafe")
       const enabled = cfg?.enabled ?? true
       if (!enabled) return undefined
-      const apiKey = cfg?.apiKey ?? process.env.TYPESAFE_API_KEY
+      let apiKey = cfg?.apiKey
+      if (!apiKey) {
+        const conn = yield* integrations.connection.active(Integration.ID.make("typesafe")).pipe(
+          Effect.catch(() => Effect.succeed(undefined)),
+        )
+        if (conn) {
+          const resolved = yield* integrations.connection.resolve(conn).pipe(
+            Effect.catch(() => Effect.succeed(undefined)),
+          )
+          if (resolved?.type === "key") {
+            apiKey = resolved.key
+          }
+        }
+      }
+      if (!apiKey) {
+        apiKey = process.env.TYPESAFE_API_KEY
+      }
       if (!apiKey) return undefined
       const endpoint = cfg?.endpoint ?? process.env.TYPESAFE_ENDPOINT ?? "https://api.typesafe.ai"
       const defaultModel = cfg?.model ?? "jev-latest"
@@ -91,4 +109,4 @@ const layer = Layer.effect(
 
 export const locationLayer = layer.pipe(Layer.provideMerge(FetchHttpClient.layer))
 
-export const node = makeLocationNode({ service: Service, layer, deps: [httpClient, Config.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [httpClient, Config.node, Integration.node] })

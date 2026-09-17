@@ -26,6 +26,7 @@ import { OpenRouterPlugin } from "./provider/openrouter"
 import { PerplexityPlugin } from "./provider/perplexity"
 import { SapAICorePlugin } from "./provider/sap-ai-core"
 import { TogetherAIPlugin } from "./provider/togetherai"
+import { TypeSafePlugin } from "./provider/typesafe"
 import { VercelPlugin } from "./provider/vercel"
 import { VenicePlugin } from "./provider/venice"
 import { XAIPlugin } from "./provider/xai"
@@ -63,6 +64,7 @@ export const ProviderPlugins: PluginInternal.Plugin<PluginInternal.Requirements 
   PerplexityPlugin,
   SapAICorePlugin,
   TogetherAIPlugin,
+  TypeSafePlugin,
   VercelPlugin,
   VenicePlugin,
   XAIPlugin,
