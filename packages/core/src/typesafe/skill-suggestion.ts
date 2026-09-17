@@ -63,6 +63,11 @@ const layer = Layer.effect(
         if (skills.length === 0 || !requestText.trim()) return undefined
 
         // Pass 1: Wide scan across all available skills + gate checks
+        yield* Effect.logInfo("TypeSafe skill suggestion evaluating", {
+          skillsCount: skills.length,
+          request: requestText.slice(0, 60),
+        })
+
         const criteria: Record<string, string | null> = {}
         for (const skill of skills) {
           criteria[skill.name] = skill.description ?? skill.name
@@ -96,6 +101,7 @@ const layer = Layer.effect(
         const gate = (actsVal + procVal + (1.0 - proseVal)) / 3.0
 
         if (gate < GATE_THRESHOLD) {
+          yield* Effect.logInfo("TypeSafe Pass 1: request does not need a skill", { gate })
           return undefined
         }
 
@@ -105,6 +111,10 @@ const layer = Layer.effect(
         const ranked = [...skills].sort((a, b) => (probs[b.name] ?? 0) - (probs[a.name] ?? 0))
         const candidates = ranked.slice(0, SHORTLIST)
         if (candidates.length === 0) return undefined
+
+        yield* Effect.logInfo("TypeSafe Pass 1 top candidates", {
+          candidates: candidates.map((c) => c.name),
+        })
 
         // Pass 2: Rerank top 3 with full SKILL.md excerpts and fits verification
         const pass2Criteria: Record<string, string | null> = {}
@@ -141,15 +151,20 @@ const layer = Layer.effect(
         }
 
         if (bestFit < FITS_THRESHOLD) {
+          yield* Effect.logInfo("TypeSafe Pass 2: no candidate met fit threshold", { bestFit })
           return undefined
         }
 
         const p2Which = pass2Response.answers["which"]
-        if (p2Which instanceof ChoiceAnswer && p2Which.choice) {
-          return p2Which.choice
-        }
+        const winner =
+          p2Which instanceof ChoiceAnswer && p2Which.choice ? p2Which.choice : candidates[0]?.name
 
-        return candidates[0]?.name
+        yield* Effect.logInfo("TypeSafe skill suggestion winner", {
+          winner,
+          bestFit,
+        })
+
+        return winner
       }).pipe(
         Effect.catch((error) =>
           Effect.logWarning("TypeSafe skill suggestion failed, proceeding without suggestion", {
