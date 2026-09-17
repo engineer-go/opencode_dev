@@ -56,19 +56,30 @@ export function normalizeProviderList(
   defaultModel?: ModelDefaultOutput["data"],
 ): NormalizedProviderListResponse {
   if (!Array.isArray(providers)) {
+    const all = new Map(
+      providers.all.map((provider) => [
+        provider.id,
+        {
+          ...provider,
+          models: Object.fromEntries(
+            Object.entries(provider.models).filter(([, model]) => model.status !== "deprecated"),
+          ),
+        },
+      ]),
+    )
+    if (!all.has("typesafe")) {
+      all.set("typesafe", {
+        id: "typesafe",
+        name: "TypeSafe",
+        source: "custom",
+        env: ["TYPESAFE_API_KEY"],
+        options: {},
+        models: {},
+      })
+    }
     return {
       ...providers,
-      all: new Map(
-        providers.all.map((provider) => [
-          provider.id,
-          {
-            ...provider,
-            models: Object.fromEntries(
-              Object.entries(provider.models).filter(([, model]) => model.status !== "deprecated"),
-            ),
-          },
-        ]),
-      ),
+      all,
     }
   }
   const all = new Map<string, Provider>()
@@ -80,6 +91,17 @@ export function normalizeProviderList(
       source: "custom",
       env: [],
       options: provider.settings ?? {},
+      models: {},
+    })
+  }
+
+  if (!all.has("typesafe")) {
+    all.set("typesafe", {
+      id: "typesafe",
+      name: "TypeSafe",
+      source: "custom",
+      env: ["TYPESAFE_API_KEY"],
+      options: {},
       models: {},
     })
   }

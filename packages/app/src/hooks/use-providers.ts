@@ -38,13 +38,28 @@ export function useProviders(directory: Accessor<string | undefined>) {
     })
   }
 
+  const allProviders = () => {
+    const all = new Map(providers().all)
+    if (!all.has("typesafe")) {
+      all.set("typesafe", {
+        id: "typesafe",
+        name: "TypeSafe",
+        source: "custom",
+        env: ["TYPESAFE_API_KEY"],
+        options: {},
+        models: {},
+      })
+    }
+    return all
+  }
+
   return {
-    all: () => providers().all,
+    all: allProviders,
     default: () => providers().default,
     defaultModel: () => providers().defaultModel,
     popular: () =>
       pipe(
-        providers().all,
+        allProviders(),
         Iterable.map(([, p]) => p),
         Iterable.filter((p) => popularProviderSet.has(p.id)),
         (v) => Array.from(v),
@@ -52,7 +67,7 @@ export function useProviders(directory: Accessor<string | undefined>) {
     connected: () => {
       const connected = new Set(providers().connected)
       return pipe(
-        providers().all,
+        allProviders(),
         Iterable.map(([, p]) => p),
         Iterable.filter((p) => connected.has(p.id)),
         (v) => Array.from(v),
