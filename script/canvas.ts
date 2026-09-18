@@ -1,25 +1,119 @@
-#!/usr/bin/env bun
 import { Database } from "bun:sqlite"
 import path from "path"
 import os from "os"
 import fs from "fs"
 
-const PORT = Number(process.env.CANVAS_PORT || 4141)
-const dbPaths = [
+const PORT = Number(process.env.PORT || process.env.CANVAS_PORT || 4141)
+
+const candidateDbPaths = [
+  process.env.DB_PATH,
+  "/data/opencode.db",
+  "/data/opencode-dev.db",
   path.join(os.homedir(), ".local/share/opencode/opencode.db"),
   path.join(os.homedir(), ".local/share/opencode/opencode-dev.db"),
-]
+].filter(Boolean) as string[]
 
 const findActiveDb = () => {
-  for (const p of dbPaths) {
+  for (const p of candidateDbPaths) {
     if (fs.existsSync(p)) return p
   }
-  return dbPaths[0]
+  return candidateDbPaths[0]
+}
+
+function fetchSessionTurns(sessionId: string) {
+  const dbPath = findActiveDb()
+  if (!dbPath || !fs.existsSync(dbPath)) return []
+
+  let db: Database | null = null
+  try {
+    db = new Database(dbPath, { readonly: true })
+
+    const messages = db
+      .query(
+        `
+      SELECT 
+        m.id,
+        m.time_created,
+        json_extract(m.data, '$.role') as role,
+        json_extract(m.data, '$.cost') as cost,
+        json_extract(m.data, '$.tokens.input') as input,
+        json_extract(m.data, '$.tokens.output') as output,
+        json_extract(m.data, '$.tokens.reasoning') as reasoning,
+        json_extract(m.data, '$.tokens.cache.read') as cache_read,
+        json_extract(m.data, '$.tokens.total') as total
+      FROM message m
+      WHERE m.session_id = ?
+      ORDER BY m.time_created ASC
+    `,
+      )
+      .all(sessionId) as any[]
+
+    const userMessages = messages.filter((m) => m.role === "user")
+    const turns = []
+
+    for (let i = 0; i < userMessages.length; i++) {
+      const u = userMessages[i]
+      const part = db
+        .query(
+          `SELECT data FROM part WHERE message_id = ? AND json_extract(data, '$.type') = 'text' LIMIT 1`,
+        )
+        .get(u.id) as any
+      const text = part ? JSON.parse(part.data).text : ""
+
+      const nextUserTime = i < userMessages.length - 1 ? userMessages[i + 1].time_created : Infinity
+      const assistantMsgs = messages.filter(
+        (m) => m.role === "assistant" && m.time_created >= u.time_created && m.time_created < nextUserTime,
+      )
+
+      let totalInput = 0
+      let totalOutput = 0
+      let totalReasoning = 0
+      let totalCache = 0
+      let totalCost = 0
+      let steps = 0
+
+      for (const a of assistantMsgs) {
+        if (a.input || a.output || a.cache_read) {
+          totalInput += a.input || 0
+          totalOutput += a.output || 0
+          totalReasoning += a.reasoning || 0
+          totalCache += a.cache_read || 0
+          totalCost += a.cost || 0
+          steps++
+        }
+      }
+
+      const totalProcessed = totalInput + totalCache
+      const cacheRatio = totalProcessed > 0 ? Number(((totalCache / totalProcessed) * 100).toFixed(1)) : 0
+
+      turns.push({
+        turn: i + 1,
+        userMessageId: u.id,
+        promptSnippet: text ? text.slice(0, 140) : "(tool action / system)",
+        fullPrompt: text || "",
+        steps,
+        tokensInput: totalInput,
+        tokensOutput: totalOutput,
+        tokensReasoning: totalReasoning,
+        tokensCacheRead: totalCache,
+        cacheRatio,
+        cost: Number(totalCost.toFixed(4)),
+        timeCreated: u.time_created,
+      })
+    }
+
+    return turns
+  } catch (err) {
+    console.error("fetchSessionTurns error:", err)
+    return []
+  } finally {
+    if (db) db.close()
+  }
 }
 
 function fetchMetrics() {
   const dbPath = findActiveDb()
-  if (!fs.existsSync(dbPath)) {
+  if (!dbPath || !fs.existsSync(dbPath)) {
     return {
       overview: {
         totalSessions: 0,
@@ -35,7 +129,7 @@ function fetchMetrics() {
       },
       sessions: [],
       toolStats: {},
-      dbPath,
+      dbPath: dbPath || "not found",
       timestamp: Date.now(),
     }
   }
@@ -176,7 +270,7 @@ function fetchMetrics() {
       },
       sessions: [],
       toolStats: {},
-      dbPath,
+      dbPath: dbPath || "error",
       timestamp: Date.now(),
     }
   } finally {
@@ -243,13 +337,18 @@ const htmlContent = `<!DOCTYPE html>
     .badge-purple { color: var(--accent-purple); background: rgba(188, 140, 255, 0.1); }
     .badge-amber { color: var(--accent-amber); background: rgba(210, 153, 34, 0.1); }
 
-    .drawer { position: fixed; top: 0; right: -450px; width: 420px; height: 100vh; background: var(--card-bg); border-left: 1px solid var(--card-border); padding: 24px; box-shadow: -10px 0 30px rgba(0,0,0,0.5); transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1); z-index: 100; overflow-y: auto; }
+    .drawer { position: fixed; top: 0; right: -750px; width: 700px; max-width: 92vw; height: 100vh; background: var(--card-bg); border-left: 1px solid var(--card-border); padding: 24px; box-shadow: -10px 0 40px rgba(0,0,0,0.6); transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1); z-index: 100; overflow-y: auto; }
     .drawer.open { right: 0; }
     .drawer-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--card-border); }
-    .drawer-close { background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; }
+    .drawer-close { background: none; border: none; color: var(--text-muted); font-size: 24px; cursor: pointer; padding: 4px 8px; }
     .drawer-close:hover { color: var(--text-bright); }
 
     .tool-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; margin: 4px 4px 0 0; background: #21262d; border-radius: 6px; font-size: 11px; }
+
+    .turns-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+    .turns-table th { background: #161b22; color: var(--text-muted); padding: 8px 10px; font-size: 10px; text-transform: uppercase; border-bottom: 1px solid var(--card-border); text-align: left; }
+    .turns-table td { padding: 8px 10px; border-bottom: 1px solid #21262d; vertical-align: top; }
+    .turns-prompt { max-width: 220px; word-break: break-word; color: var(--text-bright); font-weight: 500; }
   </style>
 </head>
 <body>
@@ -541,7 +640,9 @@ const htmlContent = `<!DOCTYPE html>
       renderTable(filtered);
     });
 
-    function openDrawer(id) {
+    let drawerChartInstance = null;
+
+    async function openDrawer(id) {
       const s = allSessions.find(x => x.id === id);
       if (!s) return;
       document.getElementById('drawerTitle').textContent = s.title;
@@ -550,35 +651,146 @@ const htmlContent = `<!DOCTYPE html>
       const toolsHtml = Object.entries(s.tools || {}).map(([t, c]) => \`<span class="tool-chip"><b style="color: var(--accent-purple);">\${t}</b>: \${c}</span>\`).join('') || 'None';
 
       document.getElementById('drawerContent').innerHTML = \`
-        <div class="kpi-card">
-          <div class="kpi-title">Session Cost</div>
-          <div class="kpi-value">$\${s.cost.toFixed(4)}</div>
-          <div class="kpi-sub">$\${s.costPerCall.toFixed(4)} avg per model turn</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div class="kpi-card">
+            <div class="kpi-title">Session Cost</div>
+            <div class="kpi-value">$\${s.cost.toFixed(4)}</div>
+            <div class="kpi-sub">$\${s.costPerCall.toFixed(4)} avg / turn</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Total Model Turns</div>
+            <div class="kpi-value">\${s.modelCalls}</div>
+            <div class="kpi-sub">\${formatNumber(s.inputPerCall)} input / turn</div>
+          </div>
         </div>
-        <div class="kpi-card">
-          <div class="kpi-title">Turns / Invocations</div>
-          <div class="kpi-value">\${s.modelCalls}</div>
-          <div class="kpi-sub">\${formatNumber(s.inputPerCall)} input tokens avg per turn</div>
-        </div>
+
         <div class="kpi-card">
           <div class="kpi-title">Token Footprint Breakdown</div>
-          <div style="margin-top: 8px; font-size: 12px; line-height: 1.8;">
-            <div>• Input: <b>\${formatNumber(s.tokensInput)}</b></div>
+          <div style="margin-top: 8px; font-size: 12px; line-height: 1.8; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div>• Fresh Input: <b>\${formatNumber(s.tokensInput)}</b></div>
             <div>• Cache Read: <b style="color: var(--accent-green);">\${formatNumber(s.tokensCacheRead)}</b> (\${s.cacheRatio}%)</div>
             <div>• Output: <b>\${formatNumber(s.tokensOutput)}</b></div>
             <div>• Reasoning: <b>\${formatNumber(s.tokensReasoning)}</b></div>
           </div>
         </div>
+
         <div class="kpi-card">
-          <div class="kpi-title">Tools Utilized in this Session</div>
+          <div class="kpi-title">Tools Utilized</div>
           <div style="margin-top: 6px;">\${toolsHtml}</div>
         </div>
+
+        <div class="kpi-card" style="padding: 16px;">
+          <div class="kpi-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <span style="font-size: 13px; color: var(--text-bright); font-weight: 600;">Message-by-Message Token Flow</span>
+            <span style="font-size: 11px; color: var(--accent-green);">● Live Turn Telemetry</span>
+          </div>
+          <div style="height: 180px; position: relative; margin-bottom: 14px;">
+            <canvas id="drawerTurnsChart"></canvas>
+          </div>
+          <div id="drawerTurnsList" style="max-height: 280px; overflow-y: auto;">
+            <div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 12px;">Loading message turns...</div>
+          </div>
+        </div>
       \`;
+
       document.getElementById('detailDrawer').classList.add('open');
+
+      try {
+        const res = await fetch('/api/session/' + id + '/turns');
+        const turns = await res.json();
+        renderDrawerTurns(turns);
+      } catch (err) {
+        console.error("Failed to load turns:", err);
+      }
+    }
+
+    function renderDrawerTurns(turns) {
+      const container = document.getElementById('drawerTurnsList');
+      if (!turns || !turns.length) {
+        container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 12px;">No individual message turns recorded yet.</div>';
+        return;
+      }
+
+      // Render chart
+      const ctx = document.getElementById('drawerTurnsChart');
+      if (ctx) {
+        if (drawerChartInstance) drawerChartInstance.destroy();
+        drawerChartInstance = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: turns.map(t => 'Turn #' + t.turn),
+            datasets: [
+              {
+                label: 'Fresh Input',
+                data: turns.map(t => t.tokensInput),
+                backgroundColor: '#58a6ff',
+                stack: 'tokens'
+              },
+              {
+                label: 'Cached Read',
+                data: turns.map(t => t.tokensCacheRead),
+                backgroundColor: '#3fb950',
+                stack: 'tokens'
+              },
+              {
+                label: 'Output',
+                data: turns.map(t => t.tokensOutput),
+                backgroundColor: '#bc8cff',
+                stack: 'tokens'
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { position: 'top', labels: { color: '#8b949e', font: { size: 10 }, boxWidth: 10 } }
+            },
+            scales: {
+              x: { ticks: { color: '#8b949e', font: { size: 9 } }, grid: { display: false } },
+              y: { ticks: { color: '#8b949e', font: { size: 9 } }, grid: { color: '#21262d' } }
+            }
+          }
+        });
+      }
+
+      // Render Table
+      container.innerHTML = \`
+        <table class="turns-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Prompt</th>
+              <th>Steps</th>
+              <th>Fresh In</th>
+              <th>Cached</th>
+              <th>Out</th>
+              <th>Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            \${turns.map(t => \`
+              <tr>
+                <td style="font-weight: 600; color: var(--accent-blue);">#\${t.turn}</td>
+                <td class="turns-prompt" title="\${(t.fullPrompt || '').replace(/"/g, '&quot;')}">\${t.promptSnippet}</td>
+                <td><span class="badge badge-purple">\${t.steps}</span></td>
+                <td style="font-family: monospace;">\${formatNumber(t.tokensInput)}</td>
+                <td style="font-family: monospace; color: var(--accent-green);">\${t.cacheRatio}%</td>
+                <td style="font-family: monospace;">\${formatNumber(t.tokensOutput)}</td>
+                <td style="font-family: monospace; font-weight: 600;">$\${t.cost.toFixed(4)}</td>
+              </tr>
+            \`).join('')}
+          </tbody>
+        </table>
+      \`;
     }
 
     function closeDrawer() {
       document.getElementById('detailDrawer').classList.remove('open');
+      if (drawerChartInstance) {
+        drawerChartInstance.destroy();
+        drawerChartInstance = null;
+      }
     }
 
     // Auto-refresh every 2.5 seconds
@@ -601,6 +813,14 @@ const server = Bun.serve({
       })
     }
 
+    const turnsMatch = url.pathname.match(/^\/api\/session\/([^/]+)\/turns$/)
+    if (turnsMatch) {
+      const turns = fetchSessionTurns(turnsMatch[1])
+      return Response.json(turns, {
+        headers: { "Access-Control-Allow-Origin": "*" },
+      })
+    }
+
     if (url.pathname === "/") {
       return new Response(htmlContent, {
         headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -614,4 +834,4 @@ const server = Bun.serve({
 console.log(`\n🚀 OpenCode Efficiency & Token Canvas is LIVE:`)
 console.log(`👉 http://localhost:${server.port}\n`)
 console.log(`Telemetry source: ${findActiveDb()}`)
-console.log(`Auto-refreshing every 2.5s from SQLite WAL journal.\n`)
+console.log(`Auto-refreshing every 2.5s from SQLite journal.\n`)
