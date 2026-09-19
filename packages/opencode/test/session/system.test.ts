@@ -126,6 +126,7 @@ describe("session.system", () => {
       expect(middle).toBeGreaterThan(alpha)
       expect(zeta).toBeGreaterThan(middle)
       expect(output).not.toContain("manual-skill")
+      expect(output).toContain("offer to save what worked as a new skill")
     }),
   )
 

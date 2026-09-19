@@ -50,6 +50,7 @@ describe("SkillGuidance", () => {
         [
           "Skills provide specialized instructions and workflows for specific tasks.",
           "Use the skill tool to load a skill when a task matches its description.",
+          "After a difficult or iterative task, offer to save what worked as a new skill or an update to a skill you loaded.",
           "<available_skills>",
           "  <skill>",
           "    <name>effect</name>",

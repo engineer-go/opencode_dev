@@ -17,6 +17,7 @@ const render = (skills: ReadonlyArray<Summary>) =>
   [
     "Skills provide specialized instructions and workflows for specific tasks.",
     "Use the skill tool to load a skill when a task matches its description.",
+    "After a difficult or iterative task, offer to save what worked as a new skill or an update to a skill you loaded.",
     ...(skills.length === 0
       ? ["No skills are currently available."]
       : [
