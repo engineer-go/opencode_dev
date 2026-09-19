@@ -13,22 +13,39 @@ const candidateDbPaths = [
   path.join(os.homedir(), ".local/share/opencode/opencode-dev.db"),
 ].filter(Boolean) as string[]
 
-const findActiveDb = () => {
+const findAllDbs = () => {
+  const seen = new Set<string>()
+  const out: string[] = []
   for (const p of candidateDbPaths) {
-    if (fs.existsSync(p)) return p
+    if (!p || !fs.existsSync(p)) continue
+    const real = fs.realpathSync(p)
+    if (seen.has(real)) continue
+    seen.add(real)
+    out.push(p)
   }
-  return candidateDbPaths[0]
+  return out
+}
+
+const findActiveDb = () => {
+  return findAllDbs()[0] ?? candidateDbPaths[0]
 }
 
 function fetchSessionTurns(sessionId: string) {
-  const dbPath = findActiveDb()
-  if (!dbPath || !fs.existsSync(dbPath)) {
+  const dbPaths = findAllDbs().filter((p) => p && fs.existsSync(p))
+  if (!dbPaths.length) {
     return { turns: [], allSteps: [], summary: { totalCost: 0, totalTurns: 0, totalSteps: 0, avgCostPerTurn: 0, peakTurnCost: 0, peakTurnIndex: 0, cacheRatioPercent: 0 } }
   }
 
-  let db: Database | null = null
-  try {
-    db = new Database(dbPath, { readonly: true })
+  // A session lives in exactly one DB (prod vs dev channel DBs use independent
+  // uuids). Search each DB and use the first one that actually contains it,
+  // so dev sessions are visible alongside prod sessions.
+  for (const dbPath of dbPaths) {
+    let db: Database | null = null
+    try {
+      db = new Database(dbPath, { readonly: true })
+
+      const sessionExists = db.query(`SELECT 1 FROM session WHERE id = ? LIMIT 1`).get(sessionId)
+      if (!sessionExists) continue
 
     const messages = db
       .query(
@@ -222,7 +239,7 @@ function fetchSessionTurns(sessionId: string) {
     const overallCacheRatio = totalProcessed > 0 ? Number(((totalCacheReadTokens / totalProcessed) * 100).toFixed(1)) : 0
     const avgCostPerTurn = turns.length > 0 ? Number((totalSessionCost / turns.length).toFixed(4)) : (allSteps.length > 0 ? Number((totalSessionCost / allSteps.length).toFixed(4)) : 0)
 
-    return {
+    const result = {
       turns,
       allSteps,
       summary: {
@@ -239,49 +256,68 @@ function fetchSessionTurns(sessionId: string) {
         totalReasoningTokens,
       },
     }
-  } catch (err) {
-    console.error("fetchSessionTurns error:", err)
-    return {
-      turns: [],
-      allSteps: [],
-      summary: { totalCost: 0, totalTurns: 0, totalSteps: 0, avgCostPerTurn: 0, peakTurnCost: 0, peakTurnIndex: 0, cacheRatioPercent: 0 },
+    db.close()
+    return result
+    } catch (err) {
+      console.error(`fetchSessionTurns error (${dbPath}):`, err)
+      try {
+        if (db) db.close()
+      } catch {}
+      continue
+    } finally {
+      try {
+        if (db) db.close()
+      } catch {}
     }
-  } finally {
-    if (db) db.close()
+  }
+  return {
+    turns: [],
+    allSteps: [],
+    summary: { totalCost: 0, totalTurns: 0, totalSteps: 0, avgCostPerTurn: 0, peakTurnCost: 0, peakTurnIndex: 0, cacheRatioPercent: 0 },
   }
 }
 
 function fetchMetrics() {
-  const dbPath = findActiveDb()
-  if (!dbPath || !fs.existsSync(dbPath)) {
+  const dbPaths = findAllDbs().filter((p) => p && fs.existsSync(p))
+  const emptyOverview = {
+    totalSessions: 0,
+    totalCost: 0,
+    totalModelCalls: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheReadTokens: 0,
+    totalReasoningTokens: 0,
+    avgCostPerCall: 0,
+    avgInputPerCall: 0,
+    cacheRatioPercent: 0,
+  }
+  if (!dbPaths.length) {
     return {
-      overview: {
-        totalSessions: 0,
-        totalCost: 0,
-        totalModelCalls: 0,
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalCacheReadTokens: 0,
-        totalReasoningTokens: 0,
-        avgCostPerCall: 0,
-        avgInputPerCall: 0,
-        cacheRatioPercent: 0,
-      },
+      overview: emptyOverview,
       sessions: [],
       toolStats: {},
-      dbPath: dbPath || "not found",
+      dbPath: candidateDbPaths[0] || "not found",
+      dbPaths: [] as string[],
       timestamp: Date.now(),
     }
   }
 
-  let db: Database | null = null
-  try {
-    db = new Database(dbPath, { readonly: true })
+  // Merge prod + dev channel DBs (opencode.db, opencode-dev.db) into one view.
+  // Session IDs are uuids, so collisions across DBs are not expected; if the
+  // same id appears twice keep the row with the latest time_updated.
+  const sessionById = new Map<string, any>()
+  const sessionSource = new Map<string, string>()
+  const toolRowsAll: { row: any; dbPath: string }[] = []
 
-    const sessions = db
-      .query(
-        `
-      SELECT 
+  for (const dbPath of dbPaths) {
+    let db: Database | null = null
+    try {
+      db = new Database(dbPath, { readonly: true })
+
+      const sessions = db
+        .query(
+          `
+      SELECT
         s.id,
         s.title,
         s.cost,
@@ -298,13 +334,21 @@ function fetchMetrics() {
       GROUP BY s.id
       ORDER BY s.time_created DESC
     `,
-      )
-      .all() as any[]
+        )
+        .all() as any[]
 
-    const toolRows = db
-      .query(
-        `
-      SELECT 
+      for (const s of sessions) {
+        const prev = sessionById.get(s.id)
+        if (!prev || (s.time_updated || 0) > (prev.time_updated || 0)) {
+          sessionById.set(s.id, s)
+          sessionSource.set(s.id, dbPath)
+        }
+      }
+
+      const toolRows = db
+        .query(
+          `
+      SELECT
         session_id,
         json_extract(data, '$.tool') as tool_name,
         COUNT(*) as count
@@ -312,16 +356,33 @@ function fetchMetrics() {
       WHERE json_extract(data, '$.type') = 'tool'
       GROUP BY session_id, tool_name
     `,
-      )
-      .all() as any[]
+        )
+        .all() as any[]
+      for (const row of toolRows) toolRowsAll.push({ row, dbPath })
+    } catch (err) {
+      console.error(`Database query error (${dbPath}):`, err)
+      continue
+    } finally {
+      try {
+        if (db) db.close()
+      } catch {}
+    }
+  }
+
+  try {
+    const sessions = [...sessionById.values()].sort((a, b) => (b.time_created || 0) - (a.time_created || 0))
 
     const sessionTools: Record<string, Record<string, number>> = {}
     const toolStats: Record<string, number> = {}
 
-    for (const row of toolRows) {
+    for (const { row, dbPath: src } of toolRowsAll) {
+      // For session ids present in both DBs, only count tools from the DB
+      // that won the session dedup above. Otherwise identical sessions would
+      // double-count tool invocations.
+      if (sessionSource.has(row.session_id) && sessionSource.get(row.session_id) !== src) continue
       if (!row.tool_name) continue
       if (!sessionTools[row.session_id]) sessionTools[row.session_id] = {}
-      sessionTools[row.session_id][row.tool_name] = row.count
+      sessionTools[row.session_id][row.tool_name] = (sessionTools[row.session_id][row.tool_name] || 0) + row.count
       toolStats[row.tool_name] = (toolStats[row.tool_name] || 0) + row.count
     }
 
@@ -390,7 +451,8 @@ function fetchMetrics() {
       },
       sessions: enrichedSessions,
       toolStats,
-      dbPath,
+      dbPath: dbPaths[0],
+      dbPaths,
       timestamp: Date.now(),
     }
   } catch (err) {
@@ -410,11 +472,10 @@ function fetchMetrics() {
       },
       sessions: [],
       toolStats: {},
-      dbPath: dbPath || "error",
+      dbPath: dbPaths[0] || "error",
+      dbPaths,
       timestamp: Date.now(),
     }
-  } finally {
-    if (db) db.close()
   }
 }
 
@@ -1463,5 +1524,5 @@ const server = Bun.serve({
 
 console.log(`\n🚀 OpenCode Efficiency & Token Canvas is LIVE:`)
 console.log(`👉 http://localhost:${server.port}\n`)
-console.log(`Telemetry source: ${findActiveDb()}`)
+console.log(`Telemetry sources (${findAllDbs().length}): ${findAllDbs().join(", ")}`)
 console.log(`Auto-refreshing every 2.5s from SQLite journal.\n`)

@@ -10,6 +10,7 @@
     "dev:desktop": "bun --cwd packages/desktop dev",
     "dev:web": "bun --cwd packages/app dev",
     "canvas": "bun run script/canvas.ts",
+    "typesafe-canvas": "bun run script/typesafe-canvas.ts",
     "lint": "oxlint",
     "typecheck": "bun turbo typecheck",
     "upgrade-opentui": "bun run script/upgrade-opentui.ts",

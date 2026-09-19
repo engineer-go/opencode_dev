@@ -93,6 +93,7 @@ const layer = Layer.effect(
             },
             questions,
           }),
+          { source: "search-rerank" },
         )
 
         const bestMatchAns = response.answers["best_match"]

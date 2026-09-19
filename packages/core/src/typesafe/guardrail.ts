@@ -139,10 +139,11 @@ const layer = Layer.effect(
             state: {
               action: "bash",
               command,
-              workdir: input.workdir,
+              ...(input.workdir !== undefined ? { workdir: input.workdir } : {}),
             },
             questions,
           }),
+          { source: "guardrail/evaluate-command" },
         )
         .pipe(
           Effect.map((response) => {
@@ -319,6 +320,7 @@ const layer = Layer.effect(
             },
             questions,
           }),
+          { source: "guardrail/sanitize-content" },
         )
         .pipe(
           Effect.map((response) => {

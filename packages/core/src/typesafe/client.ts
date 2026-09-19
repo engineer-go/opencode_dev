@@ -2,7 +2,7 @@ export * as TypeSafeClient from "./client"
 
 import { makeLocationNode } from "../effect/app-node"
 import { httpClient } from "../effect/app-node-platform"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Clock, Effect, Layer, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "../config"
 import { Integration } from "../integration"
@@ -17,6 +17,7 @@ export interface Interface {
   readonly isConfigured: () => Effect.Effect<boolean>
   readonly systemOne: (
     request: SystemOneRequest,
+    options?: { readonly source?: string },
   ) => Effect.Effect<SystemOneResponse, TypeSafeError>
 }
 
@@ -57,13 +58,8 @@ const layer = Layer.effect(
       return { apiKey, endpoint, defaultModel }
     })
 
-    return Service.of({
-      isConfigured: Effect.fn("TypeSafeClient.isConfigured")(function* () {
-        const creds = yield* getCredentials
-        return creds !== undefined
-      }),
-
-      systemOne: Effect.fn("TypeSafeClient.systemOne")(function* (req) {
+    const execute = (req: SystemOneRequest) =>
+      Effect.gen(function* () {
         const creds = yield* getCredentials
         if (!creds) {
           return yield* Effect.fail(new TypeSafeError({ message: "TypeSafe API key is not configured" }))
@@ -102,6 +98,45 @@ const layer = Layer.effect(
         )
 
         return decoded
+      })
+
+    return Service.of({
+      isConfigured: Effect.fn("TypeSafeClient.isConfigured")(function* () {
+        const creds = yield* getCredentials
+        return creds !== undefined
+      }),
+
+      systemOne: Effect.fn("TypeSafeClient.systemOne")(function* (req, options?: { readonly source?: string }) {
+        const source = options?.source ?? "unknown"
+        const questions = Object.keys(req.questions).length
+        const startedAt = yield* Clock.currentTimeMillis
+        const logCall = (fields: Record<string, string | number>) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            yield* Effect.logInfo("typesafe_call", {
+              source,
+              questions,
+              latency_ms: now - startedAt,
+              ...fields,
+            })
+          })
+        return yield* execute(req).pipe(
+          Effect.tap((response) =>
+            logCall({
+              model: response.model,
+              status: 200,
+              input_tokens: response.usage?.input_tokens ?? 0,
+              output_tokens: response.usage?.output_tokens ?? 0,
+            }),
+          ),
+          Effect.tapError((error) =>
+            logCall({
+              model: req.model ?? "unknown",
+              status: error.status ?? 0,
+              error: error.message,
+            }),
+          ),
+        )
       }),
     })
   }),

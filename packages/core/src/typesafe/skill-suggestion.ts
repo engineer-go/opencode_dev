@@ -89,6 +89,7 @@ const layer = Layer.effect(
             state: { request: requestText, recent_context: "" },
             questions: pass1Questions,
           }),
+          { source: "skill-suggestion/pass1" },
         )
 
         const acts = pass1Response.answers["gate::acts_on_user_system"]
@@ -140,6 +141,7 @@ const layer = Layer.effect(
             state: { request: requestText, recent_context: "" },
             questions: pass2Questions,
           }),
+          { source: "skill-suggestion/pass2" },
         )
 
         let bestFit = 0

@@ -156,6 +156,7 @@ const layer = Layer.effect(
               }),
             },
           }),
+          { source: "semantic-find/blocks" },
         )
 
         const existsAns = pass1Response.answers["exists"]
@@ -261,6 +262,7 @@ const searchLines = ({
           }),
         },
       }),
+      { source: "semantic-find/lines" },
     )
 
     const existsAns = response.answers["exists"]
