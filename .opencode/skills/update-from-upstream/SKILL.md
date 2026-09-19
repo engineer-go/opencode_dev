@@ -5,12 +5,14 @@ description: Sync this pruned OpenCode fork with upstream anomalyco/opencode. Us
 
 # Update From Upstream
 
-This repo is a personal fork of `anomalyco/opencode` (default branch `dev`) with cloud, web, stats, and sdk packages removed. Syncing means merging upstream `dev` into local `dev`.
+This repo is a personal fork of `anomalyco/opencode` (default branch `dev`) with cloud/infra, nix, and non-desktop packages removed. Syncing means merging upstream `dev` into local `dev`.
 
 ## Fork constraints
 
 - Unix-only (macOS/Linux). Do not add Windows or WSL handling.
-- These packages stay removed: `console`, `web`, `stats`, `enterprise`, `function`, `slack`, `sdks/vscode`. Never resurrect one while merging.
+- These paths stay removed; never resurrect one while merging: `packages/containers`, `packages/docs`, `sdks/` (vscode SDK), `infra/`, `sst.config.ts`, `sst-env.d.ts`, `github/` (action), `nix/` plus `flake.*`, `artifacts/`, `.vscode/`, `.zed/`, translated `README.*.md`.
+- These packages were restored upstream-side and stay kept: `console`, `web`, `stats`, `enterprise`, `function`, `slack`, `sdk`, `sdk-next`. Do not delete one to match an old removal note.
+- Re-derive before trusting this list: `diff <(git ls-tree --name-only HEAD | sort) <(git ls-tree --name-only upstream/dev | sort)` and the same under `packages/`.
 
 ## Procedure
 
@@ -27,7 +29,7 @@ This repo is a personal fork of `anomalyco/opencode` (default branch `dev`) with
 4. Merge:
    - `git merge upstream/dev --no-edit`
 5. Resolve conflicts:
-   - `modify/delete` conflicts are the norm. Upstream edits files inside the removed packages above; keep them deleted with `git rm` and never take upstream's side.
+    - `modify/delete` conflicts are the norm. Upstream edits files inside the removed paths above; keep them deleted with `git rm` and never take upstream's side.
    - Content conflicts in retained files: take upstream's forward change (for example a version bump) while preserving fork-only additions. Read all three sides first: `git show <merge-base>:<file>`, `git show HEAD:<file>`, `git show upstream/dev:<file>`.
    - `bun.lock` is generated. Do not hand-merge it: clear the conflict by taking one side, then run `bun install` to regenerate it against the trimmed workspaces.
 6. Verify before committing: `bun typecheck`, then run tests for the retained files the merge touched (for example `packages/opencode`, `packages/tui`).
