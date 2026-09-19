@@ -22,7 +22,9 @@ const findActiveDb = () => {
 
 function fetchSessionTurns(sessionId: string) {
   const dbPath = findActiveDb()
-  if (!dbPath || !fs.existsSync(dbPath)) return []
+  if (!dbPath || !fs.existsSync(dbPath)) {
+    return { turns: [], allSteps: [], summary: { totalCost: 0, totalTurns: 0, totalSteps: 0, avgCostPerTurn: 0, peakTurnCost: 0, peakTurnIndex: 0, cacheRatioPercent: 0 } }
+  }
 
   let db: Database | null = null
   try {
@@ -35,12 +37,14 @@ function fetchSessionTurns(sessionId: string) {
         m.id,
         m.time_created,
         json_extract(m.data, '$.role') as role,
+        json_extract(m.data, '$.parentID') as parent_id,
         json_extract(m.data, '$.cost') as cost,
         json_extract(m.data, '$.tokens.input') as input,
         json_extract(m.data, '$.tokens.output') as output,
         json_extract(m.data, '$.tokens.reasoning') as reasoning,
         json_extract(m.data, '$.tokens.cache.read') as cache_read,
-        json_extract(m.data, '$.tokens.total') as total
+        json_extract(m.data, '$.finish') as finish,
+        json_extract(m.data, '$.modelID') as model_id
       FROM message m
       WHERE m.session_id = ?
       ORDER BY m.time_created ASC
@@ -48,8 +52,43 @@ function fetchSessionTurns(sessionId: string) {
       )
       .all(sessionId) as any[]
 
+    const toolParts = db
+      .query(
+        `
+      SELECT message_id, json_extract(data, '$.tool') as tool_name
+      FROM part
+      WHERE session_id = ? AND json_extract(data, '$.type') = 'tool'
+    `,
+      )
+      .all(sessionId) as any[]
+
+    const msgTools: Record<string, string[]> = {}
+    for (const t of toolParts) {
+      if (!msgTools[t.message_id]) msgTools[t.message_id] = []
+      if (t.tool_name) msgTools[t.message_id].push(t.tool_name)
+    }
+
     const userMessages = messages.filter((m) => m.role === "user")
+    const assistantMessages = messages.filter((m) => m.role === "assistant")
+
+    let totalSessionCost = 0
+    let totalCacheReadTokens = 0
+    let totalInputTokens = 0
+    let totalOutputTokens = 0
+    let totalReasoningTokens = 0
+
+    for (const a of assistantMessages) {
+      totalSessionCost += a.cost || 0
+      totalCacheReadTokens += a.cache_read || 0
+      totalInputTokens += a.input || 0
+      totalOutputTokens += a.output || 0
+      totalReasoningTokens += a.reasoning || 0
+    }
+
+    let runningCumulative = 0
     const turns = []
+    let peakTurnCost = 0
+    let peakTurnIndex = 1
 
     for (let i = 0; i < userMessages.length; i++) {
       const u = userMessages[i]
@@ -61,51 +100,152 @@ function fetchSessionTurns(sessionId: string) {
       const text = part ? JSON.parse(part.data).text : ""
 
       const nextUserTime = i < userMessages.length - 1 ? userMessages[i + 1].time_created : Infinity
-      const assistantMsgs = messages.filter(
-        (m) => m.role === "assistant" && m.time_created >= u.time_created && m.time_created < nextUserTime,
+      const assts = assistantMessages.filter(
+        (a) => a.parent_id === u.id || (a.time_created >= u.time_created && a.time_created < nextUserTime),
       )
 
-      let totalInput = 0
-      let totalOutput = 0
-      let totalReasoning = 0
-      let totalCache = 0
-      let totalCost = 0
-      let steps = 0
+      let tInput = 0, tOutput = 0, tReasoning = 0, tCache = 0, tCost = 0
+      const tTools: Record<string, number> = {}
+      const steps = []
 
-      for (const a of assistantMsgs) {
-        if (a.input || a.output || a.cache_read) {
-          totalInput += a.input || 0
-          totalOutput += a.output || 0
-          totalReasoning += a.reasoning || 0
-          totalCache += a.cache_read || 0
-          totalCost += a.cost || 0
-          steps++
+      for (let sIdx = 0; sIdx < assts.length; sIdx++) {
+        const a = assts[sIdx]
+        const c = a.cost || 0
+        const inp = a.input || 0
+        const out = a.output || 0
+        const reas = a.reasoning || 0
+        const cach = a.cache_read || 0
+        const tools = msgTools[a.id] || []
+
+        tCost += c
+        tInput += inp
+        tOutput += out
+        tReasoning += reas
+        tCache += cach
+
+        for (const t of tools) {
+          tTools[t] = (tTools[t] || 0) + 1
         }
+
+        const stepProc = inp + cach
+        const stepCacheRatio = stepProc > 0 ? Number(((cach / stepProc) * 100).toFixed(1)) : 0
+
+        steps.push({
+          step: sIdx + 1,
+          id: a.id,
+          cost: Number(c.toFixed(4)),
+          tokensInput: inp,
+          tokensOutput: out,
+          tokensReasoning: reas,
+          tokensCacheRead: cach,
+          cacheRatio: stepCacheRatio,
+          tools,
+          finish: a.finish || "",
+          modelId: a.model_id || "",
+        })
       }
 
-      const totalProcessed = totalInput + totalCache
-      const cacheRatio = totalProcessed > 0 ? Number(((totalCache / totalProcessed) * 100).toFixed(1)) : 0
+      const startCost = Number(runningCumulative.toFixed(4))
+      runningCumulative += tCost
+      const endCost = Number(runningCumulative.toFixed(4))
+      const processed = tInput + tCache
+      const cacheRatio = processed > 0 ? Number(((tCache / processed) * 100).toFixed(1)) : 0
+      const pctOfTotal = totalSessionCost > 0 ? Number(((tCost / totalSessionCost) * 100).toFixed(1)) : 0
+
+      if (tCost > peakTurnCost) {
+        peakTurnCost = tCost
+        peakTurnIndex = i + 1
+      }
 
       turns.push({
         turn: i + 1,
         userMessageId: u.id,
         promptSnippet: text ? text.slice(0, 140) : "(tool action / system)",
         fullPrompt: text || "",
-        steps,
-        tokensInput: totalInput,
-        tokensOutput: totalOutput,
-        tokensReasoning: totalReasoning,
-        tokensCacheRead: totalCache,
+        stepsCount: assts.length,
+        cost: Number(tCost.toFixed(4)),
+        startCost,
+        endCost,
+        cumulativeCost: endCost,
+        percentOfTotal: pctOfTotal,
+        tokensInput: tInput,
+        tokensOutput: tOutput,
+        tokensReasoning: tReasoning,
+        tokensCacheRead: tCache,
         cacheRatio,
-        cost: Number(totalCost.toFixed(4)),
+        tools: tTools,
+        steps,
         timeCreated: u.time_created,
       })
     }
 
-    return turns
+    // Flat list of individual model steps across the entire session
+    let stepCumulative = 0
+    const allSteps = []
+    for (let idx = 0; idx < assistantMessages.length; idx++) {
+      const a = assistantMessages[idx]
+      const c = a.cost || 0
+      const inp = a.input || 0
+      const out = a.output || 0
+      const reas = a.reasoning || 0
+      const cach = a.cache_read || 0
+      const tools = msgTools[a.id] || []
+      const startCost = Number(stepCumulative.toFixed(4))
+      stepCumulative += c
+      const endCost = Number(stepCumulative.toFixed(4))
+      const proc = inp + cach
+      const cacheRatio = proc > 0 ? Number(((cach / proc) * 100).toFixed(1)) : 0
+      const pctOfTotal = totalSessionCost > 0 ? Number(((c / totalSessionCost) * 100).toFixed(1)) : 0
+
+      allSteps.push({
+        step: idx + 1,
+        id: a.id,
+        parentId: a.parent_id,
+        cost: Number(c.toFixed(4)),
+        startCost,
+        endCost,
+        cumulativeCost: endCost,
+        percentOfTotal: pctOfTotal,
+        tokensInput: inp,
+        tokensOutput: out,
+        tokensReasoning: reas,
+        tokensCacheRead: cach,
+        cacheRatio,
+        tools,
+        finish: a.finish || "",
+        modelId: a.model_id || "",
+        timeCreated: a.time_created,
+      })
+    }
+
+    const totalProcessed = totalInputTokens + totalCacheReadTokens
+    const overallCacheRatio = totalProcessed > 0 ? Number(((totalCacheReadTokens / totalProcessed) * 100).toFixed(1)) : 0
+    const avgCostPerTurn = turns.length > 0 ? Number((totalSessionCost / turns.length).toFixed(4)) : (allSteps.length > 0 ? Number((totalSessionCost / allSteps.length).toFixed(4)) : 0)
+
+    return {
+      turns,
+      allSteps,
+      summary: {
+        totalCost: Number(totalSessionCost.toFixed(4)),
+        totalTurns: turns.length,
+        totalSteps: assistantMessages.length,
+        avgCostPerTurn,
+        peakTurnCost: Number(peakTurnCost.toFixed(4)),
+        peakTurnIndex,
+        cacheRatioPercent: overallCacheRatio,
+        totalInputTokens,
+        totalCacheReadTokens,
+        totalOutputTokens,
+        totalReasoningTokens,
+      },
+    }
   } catch (err) {
     console.error("fetchSessionTurns error:", err)
-    return []
+    return {
+      turns: [],
+      allSteps: [],
+      summary: { totalCost: 0, totalTurns: 0, totalSteps: 0, avgCostPerTurn: 0, peakTurnCost: 0, peakTurnIndex: 0, cacheRatioPercent: 0 },
+    }
   } finally {
     if (db) db.close()
   }
@@ -337,18 +477,40 @@ const htmlContent = `<!DOCTYPE html>
     .badge-purple { color: var(--accent-purple); background: rgba(188, 140, 255, 0.1); }
     .badge-amber { color: var(--accent-amber); background: rgba(210, 153, 34, 0.1); }
 
-    .drawer { position: fixed; top: 0; right: -750px; width: 700px; max-width: 92vw; height: 100vh; background: var(--card-bg); border-left: 1px solid var(--card-border); padding: 24px; box-shadow: -10px 0 40px rgba(0,0,0,0.6); transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1); z-index: 100; overflow-y: auto; }
+    .drawer { position: fixed; top: 0; right: -820px; width: 780px; max-width: 95vw; height: 100vh; background: var(--card-bg); border-left: 1px solid var(--card-border); padding: 24px; box-shadow: -10px 0 40px rgba(0,0,0,0.6); transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1); z-index: 100; overflow-y: auto; }
     .drawer.open { right: 0; }
-    .drawer-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--card-border); }
-    .drawer-close { background: none; border: none; color: var(--text-muted); font-size: 24px; cursor: pointer; padding: 4px 8px; }
-    .drawer-close:hover { color: var(--text-bright); }
+    .drawer-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--card-border); }
+    .drawer-close { background: none; border: none; color: var(--text-muted); font-size: 24px; cursor: pointer; padding: 4px 8px; border-radius: 4px; line-height: 1; }
+    .drawer-close:hover { color: var(--text-bright); background: rgba(255,255,255,0.06); }
 
-    .tool-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; margin: 4px 4px 0 0; background: #21262d; border-radius: 6px; font-size: 11px; }
+    .tool-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; margin: 3px 4px 0 0; background: #21262d; border-radius: 6px; font-size: 11px; }
+
+    .waterfall-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .btn-group { display: inline-flex; border-radius: 6px; overflow: hidden; border: 1px solid var(--card-border); background: #0d1117; }
+    .btn-toggle { background: transparent; color: var(--text-muted); border: none; padding: 5px 10px; font-size: 11px; cursor: pointer; transition: all 0.15s; font-weight: 500; }
+    .btn-toggle:hover { color: var(--text-bright); background: rgba(255,255,255,0.05); }
+    .btn-toggle.active { background: #21262d; color: var(--text-bright); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent-blue); }
 
     .turns-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
-    .turns-table th { background: #161b22; color: var(--text-muted); padding: 8px 10px; font-size: 10px; text-transform: uppercase; border-bottom: 1px solid var(--card-border); text-align: left; }
-    .turns-table td { padding: 8px 10px; border-bottom: 1px solid #21262d; vertical-align: top; }
-    .turns-prompt { max-width: 220px; word-break: break-word; color: var(--text-bright); font-weight: 500; }
+    .turns-table th { position: sticky; top: 0; background: #161b22; color: var(--text-muted); padding: 8px 10px; font-size: 10px; text-transform: uppercase; border-bottom: 1px solid var(--card-border); text-align: left; z-index: 5; }
+    .turns-table td { padding: 8px 10px; border-bottom: 1px solid #21262d; vertical-align: middle; }
+    .turn-row { cursor: pointer; transition: background 0.15s; }
+    .turn-row:hover { background: rgba(255, 255, 255, 0.04); }
+    .turn-row.highlighted { background: rgba(88, 166, 255, 0.12) !important; }
+    .turns-prompt { max-width: 240px; word-break: break-word; color: var(--text-bright); font-weight: 500; }
+
+    .cost-bar-container { display: flex; align-items: center; gap: 6px; }
+    .cost-progress { width: 36px; height: 5px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; flex-shrink: 0; }
+    .cost-progress-fill { height: 100%; background: var(--accent-blue); border-radius: 3px; }
+    .cost-progress-fill.peak { background: var(--accent-amber); }
+
+    .accordion-toggle { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; font-size: 10px; color: var(--text-muted); margin-right: 4px; transition: transform 0.2s; user-select: none; }
+    .accordion-toggle.expanded { transform: rotate(90deg); color: var(--accent-blue); }
+    
+    .steps-subtable-container { background: #0d1117; padding: 8px 12px; border-left: 2px solid var(--accent-purple); margin: 4px 0 8px 16px; border-radius: 0 6px 6px 0; }
+    .steps-subtable { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .steps-subtable th { background: transparent; padding: 4px 8px; font-size: 9px; color: var(--text-muted); text-transform: uppercase; border-bottom: 1px solid #21262d; }
+    .steps-subtable td { padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); }
   </style>
 </head>
 <body>
@@ -497,9 +659,16 @@ const htmlContent = `<!DOCTYPE html>
       document.getElementById('kpiCacheTokens').textContent = formatNumber(o.totalCacheReadTokens) + " cached";
 
       allSessions = data.sessions || [];
-      renderTable(allSessions);
+      const q = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
+      const filtered = q ? allSessions.filter(s => s.title.toLowerCase().includes(q) || s.id.toLowerCase().includes(q)) : allSessions;
+      renderTable(filtered);
       renderCharts(data);
       renderActiveSession(allSessions[0]);
+
+      // If drawer is currently open for the active session, refresh its waterfall turns quietly
+      if (activeDrawerSessionId && allSessions.length > 0 && allSessions[0].id === activeDrawerSessionId) {
+        refreshDrawerTurnsQuietly(activeDrawerSessionId);
+      }
     }
 
     function renderActiveSession(s) {
@@ -641,100 +810,376 @@ const htmlContent = `<!DOCTYPE html>
     });
 
     let drawerChartInstance = null;
+    let activeDrawerSessionId = null;
+    let activeDrawerData = null;
+    let activeDrawerSession = null;
+    let waterfallChartMode = 'waterfall'; // 'waterfall' | 'spikes' | 'tokens'
+    let waterfallGranularity = 'auto'; // 'auto' | 'turns' | 'steps'
+    let expandedTurnIds = new Set();
+    let drawerFilterText = '';
+
+    function getToolColor(tool) {
+      if (tool === 'bash') return '#58a6ff';
+      if (tool === 'read') return '#bc8cff';
+      if (tool === 'write' || tool === 'edit') return '#3fb950';
+      if (tool === 'grep' || tool === 'glob') return '#d29922';
+      if (tool === 'webfetch') return '#39c5bb';
+      if (tool === 'question') return '#f85149';
+      return '#8b949e';
+    }
 
     async function openDrawer(id) {
       const s = allSessions.find(x => x.id === id);
       if (!s) return;
+      activeDrawerSessionId = id;
+      activeDrawerSession = s;
+      expandedTurnIds.clear();
+      drawerFilterText = '';
+
       document.getElementById('drawerTitle').textContent = s.title;
       document.getElementById('drawerId').textContent = "ID: " + s.id;
-      
-      const toolsHtml = Object.entries(s.tools || {}).map(([t, c]) => \`<span class="tool-chip"><b style="color: var(--accent-purple);">\${t}</b>: \${c}</span>\`).join('') || 'None';
+      document.getElementById('detailDrawer').classList.add('open');
 
       document.getElementById('drawerContent').innerHTML = \`
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-          <div class="kpi-card">
-            <div class="kpi-title">Session Cost</div>
-            <div class="kpi-value">$\${s.cost.toFixed(4)}</div>
-            <div class="kpi-sub">$\${s.costPerCall.toFixed(4)} avg / turn</div>
+        <div style="color: var(--text-muted); font-size: 13px; text-align: center; padding: 40px 0;">
+          <div style="display: inline-block; width: 24px; height: 24px; border: 2px solid var(--accent-blue); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 12px;"></div>
+          <div>Loading turn waterfall & session telemetry...</div>
+        </div>
+      \`;
+
+      try {
+        const res = await fetch('/api/session/' + id + '/turns');
+        const data = await res.json();
+        activeDrawerData = data;
+        renderFullDrawer();
+      } catch (err) {
+        console.error("Failed to load turns:", err);
+        document.getElementById('drawerContent').innerHTML = '<div style="color: var(--accent-red); padding: 20px;">Failed to load turn telemetry.</div>';
+      }
+    }
+
+    async function refreshDrawerTurnsQuietly(id) {
+      try {
+        const res = await fetch('/api/session/' + id + '/turns');
+        const data = await res.json();
+        activeDrawerData = data;
+        const s = allSessions.find(x => x.id === id);
+        if (s) activeDrawerSession = s;
+        updateDrawerTelemetry();
+      } catch (e) {}
+    }
+
+    function renderFullDrawer() {
+      const s = activeDrawerSession;
+      const data = activeDrawerData;
+      if (!s || !data) return;
+
+      const sm = data.summary || {};
+      const turns = data.turns || [];
+      const allSteps = data.allSteps || [];
+
+      // Determine default granularity if auto
+      const effectiveGranularity = waterfallGranularity === 'auto' 
+        ? (turns.length > 1 ? 'turns' : 'steps') 
+        : waterfallGranularity;
+
+      const toolsHtml = Object.entries(s.tools || {}).map(([t, c]) => \`
+        <span class="tool-chip" style="border-left: 2px solid \${getToolColor(t)};">
+          <b style="color: \${getToolColor(t)};">\${t}</b>: \${c}
+        </span>
+      \`).join('') || '<span style="color: var(--text-muted);">None</span>';
+
+      document.getElementById('drawerContent').innerHTML = \`
+        <!-- KPI Row -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 8px;">
+          <div class="kpi-card" style="padding: 12px;">
+            <div class="kpi-title">Total Spend</div>
+            <div class="kpi-value" style="font-size: 18px; color: var(--text-bright); font-family: monospace;">$\${(sm.totalCost || s.cost).toFixed(4)}</div>
+            <div class="kpi-sub">$\${(sm.avgCostPerTurn || s.costPerCall).toFixed(4)} avg / turn</div>
           </div>
-          <div class="kpi-card">
-            <div class="kpi-title">Total Model Turns</div>
-            <div class="kpi-value">\${s.modelCalls}</div>
-            <div class="kpi-sub">\${formatNumber(s.inputPerCall)} input / turn</div>
+          <div class="kpi-card" style="padding: 12px;">
+            <div class="kpi-title">Model Turns</div>
+            <div class="kpi-value" style="font-size: 18px;">\${sm.totalTurns || turns.length} <span style="font-size: 11px; font-weight: normal; color: var(--text-muted);">(\${sm.totalSteps || allSteps.length} steps)</span></div>
+            <div class="kpi-sub">\${formatNumber(s.inputPerCall)} in / turn</div>
+          </div>
+          <div class="kpi-card" style="padding: 12px;">
+            <div class="kpi-title">Peak Cost Turn</div>
+            <div class="kpi-value" style="font-size: 18px; color: var(--accent-amber); font-family: monospace;">$\${(sm.peakTurnCost || 0).toFixed(4)}</div>
+            <div class="kpi-sub">Turn #\${sm.peakTurnIndex || 1} spike</div>
+          </div>
+          <div class="kpi-card" style="padding: 12px;">
+            <div class="kpi-title">Cache Hit Ratio</div>
+            <div class="kpi-value" style="font-size: 18px; color: var(--accent-green);">\${sm.cacheRatioPercent || s.cacheRatio}%</div>
+            <div class="kpi-sub">\${formatNumber(sm.totalCacheReadTokens || s.tokensCacheRead)} cached</div>
           </div>
         </div>
 
-        <div class="kpi-card">
-          <div class="kpi-title">Token Footprint Breakdown</div>
-          <div style="margin-top: 8px; font-size: 12px; line-height: 1.8; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-            <div>• Fresh Input: <b>\${formatNumber(s.tokensInput)}</b></div>
-            <div>• Cache Read: <b style="color: var(--accent-green);">\${formatNumber(s.tokensCacheRead)}</b> (\${s.cacheRatio}%)</div>
-            <div>• Output: <b>\${formatNumber(s.tokensOutput)}</b></div>
-            <div>• Reasoning: <b>\${formatNumber(s.tokensReasoning)}</b></div>
-          </div>
+        <!-- Tools Used -->
+        <div class="kpi-card" style="padding: 12px;">
+          <div class="kpi-title" style="margin-bottom: 6px;">Tools Utilized Across Session</div>
+          <div>\${toolsHtml}</div>
         </div>
 
-        <div class="kpi-card">
-          <div class="kpi-title">Tools Utilized</div>
-          <div style="margin-top: 6px;">\${toolsHtml}</div>
-        </div>
-
+        <!-- Waterfall Visualizer Section -->
         <div class="kpi-card" style="padding: 16px;">
-          <div class="kpi-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <span style="font-size: 13px; color: var(--text-bright); font-weight: 600;">Message-by-Message Token Flow</span>
-            <span style="font-size: 11px; color: var(--accent-green);">● Live Turn Telemetry</span>
+          <div class="waterfall-controls">
+            <div>
+              <div style="font-size: 14px; font-weight: 600; color: var(--text-bright); display: flex; align-items: center; gap: 8px;">
+                <span>Per-Turn Cost Waterfall</span>
+                <span style="font-size: 10px; background: rgba(88, 166, 255, 0.15); color: var(--accent-blue); padding: 2px 6px; border-radius: 4px; font-weight: 500;">Interactive</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Step-by-step cost accumulation and model turn dynamics</div>
+            </div>
+
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <!-- Granularity toggle if multiple user turns -->
+              \${turns.length > 1 ? \`
+                <div class="btn-group">
+                  <button class="btn-toggle \${effectiveGranularity === 'turns' ? 'active' : ''}" onclick="setWaterfallGranularity('turns')">💬 User Turns (\${turns.length})</button>
+                  <button class="btn-toggle \${effectiveGranularity === 'steps' ? 'active' : ''}" onclick="setWaterfallGranularity('steps')">⚙️ All Steps (\${allSteps.length})</button>
+                </div>
+              \` : ''}
+
+              <!-- Chart Mode toggle -->
+              <div class="btn-group">
+                <button class="btn-toggle \${waterfallChartMode === 'waterfall' ? 'active' : ''}" onclick="setWaterfallMode('waterfall')" title="Financial cumulative staircase waterfall">🧗 Staircase ($)</button>
+                <button class="btn-toggle \${waterfallChartMode === 'spikes' ? 'active' : ''}" onclick="setWaterfallMode('spikes')" title="Turn Cost bars + Cumulative spend line">📊 Cost & Trend</button>
+                <button class="btn-toggle \${waterfallChartMode === 'tokens' ? 'active' : ''}" onclick="setWaterfallMode('tokens')" title="Fresh input, cached read, output tokens">⚡ Token Flow</button>
+              </div>
+            </div>
           </div>
-          <div style="height: 180px; position: relative; margin-bottom: 14px;">
+
+          <div style="height: 220px; position: relative; margin-bottom: 12px; background: rgba(0,0,0,0.2); border-radius: 6px; padding: 8px;">
             <canvas id="drawerTurnsChart"></canvas>
           </div>
-          <div id="drawerTurnsList" style="max-height: 280px; overflow-y: auto;">
-            <div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 12px;">Loading message turns...</div>
+          <div style="font-size: 11px; color: var(--text-muted); text-align: center;">
+            💡 Click any bar on the chart to scroll to and inspect that turn in the table below.
+          </div>
+        </div>
+
+        <!-- Turn-by-Turn Inspection Table -->
+        <div class="kpi-card" style="padding: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+            <span style="font-size: 13px; font-weight: 600; color: var(--text-bright);">Detailed Turn-by-Turn Matrix</span>
+            <input type="text" id="drawerTurnSearch" placeholder="Filter turns by prompt or tool..." oninput="onDrawerFilterInput(this.value)" class="search-input" style="width: 220px; font-size: 11px; padding: 4px 8px;">
+          </div>
+          <div id="drawerTurnsList" style="max-height: 380px; overflow-y: auto; border: 1px solid var(--card-border); border-radius: 6px;">
           </div>
         </div>
       \`;
 
-      document.getElementById('detailDrawer').classList.add('open');
-
-      try {
-        const res = await fetch('/api/session/' + id + '/turns');
-        const turns = await res.json();
-        renderDrawerTurns(turns);
-      } catch (err) {
-        console.error("Failed to load turns:", err);
-      }
+      renderDrawerChart();
+      renderDrawerTable();
     }
 
-    function renderDrawerTurns(turns) {
-      const container = document.getElementById('drawerTurnsList');
-      if (!turns || !turns.length) {
-        container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 12px;">No individual message turns recorded yet.</div>';
-        return;
-      }
+    function setWaterfallMode(mode) {
+      waterfallChartMode = mode;
+      renderFullDrawer();
+    }
 
-      // Render chart
+    function setWaterfallGranularity(granularity) {
+      waterfallGranularity = granularity;
+      renderFullDrawer();
+    }
+
+    function onDrawerFilterInput(val) {
+      drawerFilterText = (val || '').toLowerCase().trim();
+      renderDrawerTable();
+    }
+
+    function toggleTurnAccordion(turnNum, e) {
+      if (e) e.stopPropagation();
+      if (expandedTurnIds.has(turnNum)) {
+        expandedTurnIds.delete(turnNum);
+      } else {
+        expandedTurnIds.add(turnNum);
+      }
+      renderDrawerTable();
+    }
+
+    function highlightAndScrollToTurn(elemId) {
+      const row = document.getElementById(elemId);
+      if (!row) return;
+      document.querySelectorAll('.turn-row').forEach(r => r.classList.remove('highlighted'));
+      row.classList.add('highlighted');
+      row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function renderDrawerChart() {
+      const data = activeDrawerData;
+      if (!data) return;
+
+      const turns = data.turns || [];
+      const allSteps = data.allSteps || [];
+      const effectiveGranularity = waterfallGranularity === 'auto' 
+        ? (turns.length > 1 ? 'turns' : 'steps') 
+        : waterfallGranularity;
+
+      const items = effectiveGranularity === 'turns' ? turns : allSteps;
+      if (!items || !items.length) return;
+
       const ctx = document.getElementById('drawerTurnsChart');
-      if (ctx) {
-        if (drawerChartInstance) drawerChartInstance.destroy();
-        drawerChartInstance = new Chart(ctx, {
+      if (!ctx) return;
+      if (drawerChartInstance) drawerChartInstance.destroy();
+
+      const labels = items.map(item => item.turn ? 'Turn #' + item.turn : 'Step #' + item.step);
+      const peakCost = data.summary?.peakTurnCost || 0;
+
+      let chartConfig;
+
+      if (waterfallChartMode === 'waterfall') {
+        // Floating Staircase Waterfall [startCost, endCost]
+        chartConfig = {
           type: 'bar',
           data: {
-            labels: turns.map(t => 'Turn #' + t.turn),
+            labels,
+            datasets: [{
+              label: 'Cumulative Cost Step ($)',
+              data: items.map(it => [it.startCost, it.endCost]),
+              backgroundColor: items.map(it => it.cost >= peakCost && peakCost > 0 ? '#d29922' : 'rgba(88, 166, 255, 0.85)'),
+              borderColor: items.map(it => it.cost >= peakCost && peakCost > 0 ? '#f0883e' : '#58a6ff'),
+              borderWidth: 1,
+              borderRadius: 3
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#161b22',
+                titleColor: '#f0f6fc',
+                bodyColor: '#c9d1d9',
+                borderColor: '#30363d',
+                borderWidth: 1,
+                padding: 10,
+                callbacks: {
+                  title: (context) => {
+                    const it = items[context[0].dataIndex];
+                    return (it.turn ? 'Turn #' + it.turn : 'Step #' + it.step) + (it.promptSnippet ? ': ' + it.promptSnippet.slice(0, 36) + '...' : '');
+                  },
+                  label: (context) => {
+                    const it = items[context.dataIndex];
+                    return [
+                      'Turn Spend: +' + '$' + it.cost.toFixed(4) + ' (' + (it.percentOfTotal || 0) + '% of session)',
+                      'Cumulative Spend: $' + it.startCost.toFixed(4) + ' → $' + it.endCost.toFixed(4),
+                      it.stepsCount !== undefined ? 'Model Steps: ' + it.stepsCount : 'Finish: ' + (it.finish || 'step'),
+                      'Input: ' + formatNumber(it.tokensInput) + ' fresh | ' + formatNumber(it.tokensCacheRead) + ' cached (' + it.cacheRatio + '%)',
+                      'Output: ' + formatNumber(it.tokensOutput) + ' tokens'
+                    ];
+                  }
+                }
+              }
+            },
+            scales: {
+              x: { ticks: { color: '#8b949e', font: { size: 9 }, maxRotation: 45 }, grid: { display: false } },
+              y: { 
+                ticks: { color: '#58a6ff', font: { size: 10 }, callback: v => '$' + v.toFixed(3) }, 
+                grid: { color: '#21262d' } 
+              }
+            },
+            onClick: (e, elements) => {
+              if (elements && elements.length > 0) {
+                const it = items[elements[0].index];
+                highlightAndScrollToTurn(it.turn ? 'turn-row-' + it.turn : 'step-row-' + it.step);
+              }
+            }
+          }
+        };
+      } else if (waterfallChartMode === 'spikes') {
+        // Dual Axis: Turn Cost bar (left) + Cumulative Line (right)
+        chartConfig = {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [
+              {
+                type: 'bar',
+                label: 'Turn Cost ($)',
+                data: items.map(it => it.cost),
+                backgroundColor: items.map(it => it.cost >= peakCost && peakCost > 0 ? '#d29922' : 'rgba(88, 166, 255, 0.85)'),
+                borderRadius: 3,
+                yAxisID: 'yCost',
+                order: 2
+              },
+              {
+                type: 'line',
+                label: 'Cumulative Total ($)',
+                data: items.map(it => it.endCost),
+                borderColor: '#3fb950',
+                backgroundColor: 'rgba(63, 185, 80, 0.1)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                yAxisID: 'yCumulative',
+                order: 1
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { position: 'top', labels: { color: '#8b949e', font: { size: 10 }, boxWidth: 10 } },
+              tooltip: {
+                backgroundColor: '#161b22',
+                titleColor: '#f0f6fc',
+                bodyColor: '#c9d1d9',
+                borderColor: '#30363d',
+                borderWidth: 1,
+                callbacks: {
+                  title: (context) => {
+                    const it = items[context[0].dataIndex];
+                    return (it.turn ? 'Turn #' + it.turn : 'Step #' + it.step) + (it.promptSnippet ? ': ' + it.promptSnippet.slice(0, 36) + '...' : '');
+                  }
+                }
+              }
+            },
+            scales: {
+              x: { ticks: { color: '#8b949e', font: { size: 9 } }, grid: { display: false } },
+              yCost: { 
+                type: 'linear', position: 'left', 
+                ticks: { color: '#58a6ff', font: { size: 9 }, callback: v => '$' + v.toFixed(3) }, 
+                grid: { color: '#21262d' } 
+              },
+              yCumulative: { 
+                type: 'linear', position: 'right', 
+                ticks: { color: '#3fb950', font: { size: 9 }, callback: v => '$' + v.toFixed(2) }, 
+                grid: { display: false } 
+              }
+            },
+            onClick: (e, elements) => {
+              if (elements && elements.length > 0) {
+                const it = items[elements[0].index];
+                highlightAndScrollToTurn(it.turn ? 'turn-row-' + it.turn : 'step-row-' + it.step);
+              }
+            }
+          }
+        };
+      } else {
+        // Token Flow: Fresh Input + Cached Read + Output Stacked
+        chartConfig = {
+          type: 'bar',
+          data: {
+            labels,
             datasets: [
               {
                 label: 'Fresh Input',
-                data: turns.map(t => t.tokensInput),
+                data: items.map(it => it.tokensInput),
                 backgroundColor: '#58a6ff',
                 stack: 'tokens'
               },
               {
                 label: 'Cached Read',
-                data: turns.map(t => t.tokensCacheRead),
+                data: items.map(it => it.tokensCacheRead),
                 backgroundColor: '#3fb950',
                 stack: 'tokens'
               },
               {
                 label: 'Output',
-                data: turns.map(t => t.tokensOutput),
+                data: items.map(it => it.tokensOutput),
                 backgroundColor: '#bc8cff',
                 stack: 'tokens'
               }
@@ -748,44 +1193,225 @@ const htmlContent = `<!DOCTYPE html>
             },
             scales: {
               x: { ticks: { color: '#8b949e', font: { size: 9 } }, grid: { display: false } },
-              y: { ticks: { color: '#8b949e', font: { size: 9 } }, grid: { color: '#21262d' } }
+              y: { ticks: { color: '#8b949e', font: { size: 9 }, callback: v => formatNumber(v) }, grid: { color: '#21262d' } }
+            },
+            onClick: (e, elements) => {
+              if (elements && elements.length > 0) {
+                const it = items[elements[0].index];
+                highlightAndScrollToTurn(it.turn ? 'turn-row-' + it.turn : 'step-row-' + it.step);
+              }
             }
           }
-        });
+        };
       }
 
-      // Render Table
-      container.innerHTML = \`
-        <table class="turns-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Prompt</th>
-              <th>Steps</th>
-              <th>Fresh In</th>
-              <th>Cached</th>
-              <th>Out</th>
-              <th>Cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            \${turns.map(t => \`
+      drawerChartInstance = new Chart(ctx, chartConfig);
+    }
+
+    function renderDrawerTable() {
+      const container = document.getElementById('drawerTurnsList');
+      if (!container) return;
+
+      const data = activeDrawerData;
+      if (!data) {
+        container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 16px;">No turns recorded.</div>';
+        return;
+      }
+
+      const turns = data.turns || [];
+      const allSteps = data.allSteps || [];
+      const effectiveGranularity = waterfallGranularity === 'auto' 
+        ? (turns.length > 1 ? 'turns' : 'steps') 
+        : waterfallGranularity;
+
+      const peakCost = data.summary?.peakTurnCost || 0;
+
+      if (effectiveGranularity === 'turns') {
+        const filteredTurns = turns.filter(t => {
+          if (!drawerFilterText) return true;
+          const matchPrompt = (t.fullPrompt || '').toLowerCase().includes(drawerFilterText);
+          const matchTools = Object.keys(t.tools || {}).some(k => k.toLowerCase().includes(drawerFilterText));
+          return matchPrompt || matchTools;
+        });
+
+        if (!filteredTurns.length) {
+          container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 16px;">No turns match the filter.</div>';
+          return;
+        }
+
+        container.innerHTML = \`
+          <table class="turns-table">
+            <thead>
               <tr>
-                <td style="font-weight: 600; color: var(--accent-blue);">#\${t.turn}</td>
-                <td class="turns-prompt" title="\${(t.fullPrompt || '').replace(/"/g, '&quot;')}">\${t.promptSnippet}</td>
-                <td><span class="badge badge-purple">\${t.steps}</span></td>
-                <td style="font-family: monospace;">\${formatNumber(t.tokensInput)}</td>
-                <td style="font-family: monospace; color: var(--accent-green);">\${t.cacheRatio}%</td>
-                <td style="font-family: monospace;">\${formatNumber(t.tokensOutput)}</td>
-                <td style="font-family: monospace; font-weight: 600;">$\${t.cost.toFixed(4)}</td>
+                <th style="width: 32px;">#</th>
+                <th>Prompt / User Action</th>
+                <th>Steps</th>
+                <th>Turn Cost</th>
+                <th>Cumulative</th>
+                <th>Fresh In</th>
+                <th>Cache %</th>
+                <th>Output</th>
+                <th>Tools</th>
               </tr>
-            \`).join('')}
-          </tbody>
-        </table>
-      \`;
+            </thead>
+            <tbody>
+              \${filteredTurns.map(t => {
+                const isExpanded = expandedTurnIds.has(t.turn);
+                const hasSteps = t.steps && t.steps.length > 0;
+                const isPeak = t.cost >= peakCost && peakCost > 0;
+                const toolsBadges = Object.entries(t.tools || {}).map(([name, count]) => \`
+                  <span class="tool-chip" style="font-size: 10px; padding: 1px 5px; border-left: 2px solid \${getToolColor(name)};">
+                    <b style="color: \${getToolColor(name)};">\${name}</b> \${count}
+                  </span>
+                \`).join('') || '-';
+
+                const maxPct = Math.min(100, Math.max(5, (t.percentOfTotal || 0)));
+
+                return \`
+                  <tr class="turn-row" id="turn-row-\${t.turn}" onclick="toggleTurnAccordion(\${t.turn}, event)">
+                    <td style="font-weight: 600; color: var(--accent-blue); white-space: nowrap;">
+                      \${hasSteps ? \`<span class="accordion-toggle \${isExpanded ? 'expanded' : ''}">▶</span>\` : ''}
+                      #\${t.turn}
+                    </td>
+                    <td class="turns-prompt" title="\${(t.fullPrompt || '').replace(/"/g, '&quot;')}">
+                      \${t.promptSnippet}
+                    </td>
+                    <td>
+                      <span class="badge badge-purple">\${t.stepsCount}</span>
+                    </td>
+                    <td style="font-family: monospace; font-weight: 600; \${isPeak ? 'color: var(--accent-amber);' : ''}">
+                      <div class="cost-bar-container">
+                        <span>$\${t.cost.toFixed(4)}</span>
+                        <div class="cost-progress" title="\${t.percentOfTotal}% of session spend">
+                          <div class="cost-progress-fill \${isPeak ? 'peak' : ''}" style="width: \${maxPct}%;"></div>
+                        </div>
+                      </div>
+                    </td>
+                    <td style="font-family: monospace; color: var(--text-muted);">$\${t.cumulativeCost.toFixed(4)}</td>
+                    <td style="font-family: monospace;">\${formatNumber(t.tokensInput)}</td>
+                    <td><span class="badge badge-green">\${t.cacheRatio}%</span></td>
+                    <td style="font-family: monospace;">\${formatNumber(t.tokensOutput)}</td>
+                    <td>\${toolsBadges}</td>
+                  </tr>
+                  \${isExpanded && hasSteps ? \`
+                    <tr style="background: rgba(0,0,0,0.25);">
+                      <td colspan="9" style="padding: 0;">
+                        <div class="steps-subtable-container">
+                          <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; text-transform: uppercase;">
+                            Nested LLM Invocations in Turn #\${t.turn}
+                          </div>
+                          <table class="steps-subtable">
+                            <thead>
+                              <tr>
+                                <th>Step</th>
+                                <th>Tools Invoked</th>
+                                <th>Cost</th>
+                                <th>Fresh In</th>
+                                <th>Cache Read</th>
+                                <th>Out</th>
+                                <th>Finish</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              \${t.steps.map(st => \`
+                                <tr>
+                                  <td style="color: var(--accent-purple); font-weight: 600;">Step \${st.step}</td>
+                                  <td>
+                                    \${st.tools.map(tool => \`<span class="tool-chip" style="font-size: 10px; padding: 1px 4px; border-left: 2px solid \${getToolColor(tool)};"><b style="color: \${getToolColor(tool)};">\${tool}</b></span>\`).join(' ') || '<span style="color: var(--text-muted);">-</span>'}
+                                  </td>
+                                  <td style="font-family: monospace; font-weight: 600;">$\${st.cost.toFixed(4)}</td>
+                                  <td style="font-family: monospace;">\${formatNumber(st.tokensInput)}</td>
+                                  <td style="font-family: monospace; color: var(--accent-green);">\${formatNumber(st.tokensCacheRead)} (\${st.cacheRatio}%)</td>
+                                  <td style="font-family: monospace;">\${formatNumber(st.tokensOutput)}</td>
+                                  <td style="color: var(--text-muted);">\${st.finish || '-'}</td>
+                                </tr>
+                              \`).join('')}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  \` : ''}
+                \`;
+              }).join('')}
+            </tbody>
+          </table>
+        \`;
+      } else {
+        // Steps Granularity
+        const filteredSteps = allSteps.filter(st => {
+          if (!drawerFilterText) return true;
+          const matchTool = (st.tools || []).some(t => t.toLowerCase().includes(drawerFilterText));
+          const matchFinish = (st.finish || '').toLowerCase().includes(drawerFilterText);
+          return matchTool || matchFinish;
+        });
+
+        if (!filteredSteps.length) {
+          container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 16px;">No model steps match the filter.</div>';
+          return;
+        }
+
+        container.innerHTML = \`
+          <table class="turns-table">
+            <thead>
+              <tr>
+                <th style="width: 48px;">Step #</th>
+                <th>Tools Called</th>
+                <th>Step Cost</th>
+                <th>Cumulative</th>
+                <th>Fresh In</th>
+                <th>Cache Read</th>
+                <th>Output</th>
+                <th>Finish / Mode</th>
+              </tr>
+            </thead>
+            <tbody>
+              \${filteredSteps.map(st => {
+                const isPeak = st.cost >= peakCost && peakCost > 0;
+                const toolBadges = (st.tools || []).map(tool => \`
+                  <span class="tool-chip" style="font-size: 10px; padding: 1px 5px; border-left: 2px solid \${getToolColor(tool)};">
+                    <b style="color: \${getToolColor(tool)};">\${tool}</b>
+                  </span>
+                \`).join('') || '<span style="color: var(--text-muted);">-</span>';
+
+                const maxPct = Math.min(100, Math.max(5, (st.percentOfTotal || 0)));
+
+                return \`
+                  <tr class="turn-row" id="step-row-\${st.step}">
+                    <td style="font-weight: 600; color: var(--accent-purple);">#\${st.step}</td>
+                    <td>\${toolBadges}</td>
+                    <td style="font-family: monospace; font-weight: 600; \${isPeak ? 'color: var(--accent-amber);' : ''}">
+                      <div class="cost-bar-container">
+                        <span>$\${st.cost.toFixed(4)}</span>
+                        <div class="cost-progress" title="\${st.percentOfTotal}% of session spend">
+                          <div class="cost-progress-fill \${isPeak ? 'peak' : ''}" style="width: \${maxPct}%;"></div>
+                        </div>
+                      </div>
+                    </td>
+                    <td style="font-family: monospace; color: var(--text-muted);">$\${st.cumulativeCost.toFixed(4)}</td>
+                    <td style="font-family: monospace;">\${formatNumber(st.tokensInput)}</td>
+                    <td style="font-family: monospace; color: var(--accent-green);">\${formatNumber(st.tokensCacheRead)} (\${st.cacheRatio}%)</td>
+                    <td style="font-family: monospace;">\${formatNumber(st.tokensOutput)}</td>
+                    <td style="color: var(--text-muted); font-size: 11px;">\${st.finish || '-'}</td>
+                  </tr>
+                \`;
+              }).join('')}
+            </tbody>
+          </table>
+        \`;
+      }
+    }
+
+    function updateDrawerTelemetry() {
+      if (!activeDrawerData) return;
+      renderDrawerChart();
+      renderDrawerTable();
     }
 
     function closeDrawer() {
+      activeDrawerSessionId = null;
+      activeDrawerData = null;
+      activeDrawerSession = null;
       document.getElementById('detailDrawer').classList.remove('open');
       if (drawerChartInstance) {
         drawerChartInstance.destroy();
@@ -805,6 +1431,10 @@ const server = Bun.serve({
   port: PORT,
   fetch(req) {
     const url = new URL(req.url)
+
+    if (url.pathname === "/favicon.ico") {
+      return new Response(null, { status: 204 })
+    }
 
     if (url.pathname === "/api/stats") {
       const data = fetchMetrics()
