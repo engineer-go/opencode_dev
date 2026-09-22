@@ -18,8 +18,11 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-builder --config electron-builder.config.ts",
+    "prepackage": "bun ./scripts/copy-icons.ts && bun ./scripts/copy-metainfo.ts",
     "package:mac": "electron-builder --mac --config electron-builder.config.ts",
+    "prepackage:mac": "bun ./scripts/copy-icons.ts && bun ./scripts/copy-metainfo.ts",
     "package:linux": "electron-builder --linux --config electron-builder.config.ts",
+    "prepackage:linux": "bun ./scripts/copy-icons.ts && bun ./scripts/copy-metainfo.ts",
     "native:build": "bun install --cwd native"
   },
   "main": "./out/main/index.js",

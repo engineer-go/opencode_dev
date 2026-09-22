@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs"
+import { homedir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -26,8 +28,43 @@ const APP_IDS = {
   prod: "ai.opencode.desktop",
 } as const
 
+const pkg = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8")) as {
+  version: string
+  devDependencies?: { electron?: string }
+}
+
+/** Same stamp as packages/app/vite.js — override with OPENCODE_BUILD. */
+const buildStamp = (() => {
+  const raw = process.env.OPENCODE_BUILD
+  if (raw) return raw
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return `${String(now.getFullYear()).slice(2)}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+})()
+
+/** Prefer a pre-downloaded Electron zip when TLS to GitHub fails (corp MITM / VPN). */
+function resolveElectronDist() {
+  if (process.env.ELECTRON_DIST) return process.env.ELECTRON_DIST
+  const version = pkg.devDependencies?.electron
+  if (!version || version.includes("/")) return undefined
+  const platform = process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux"
+  const arch = process.arch === "arm64" ? "arm64" : "x64"
+  const zip = path.join(homedir(), ".cache", "electron", `electron-v${version}-${platform}-${arch}.zip`)
+  if (existsSync(zip)) return zip
+  return undefined
+}
+
+function linuxLauncherName() {
+  if (channel === "prod") return "OpenCode"
+  if (channel === "beta") return `OpenCode Beta ${buildStamp}`
+  return `OpenCode Dev ${buildStamp}`
+}
+
+const electronDist = resolveElectronDist()
+
 const getBase = (appId: string): Configuration => ({
   artifactName: "opencode-desktop-${os}-${arch}.${ext}",
+  ...(electronDist ? { electronDist } : {}),
   directories: {
     output: "dist",
     buildResources: "resources",
@@ -88,6 +125,9 @@ const getBase = (appId: string): Configuration => ({
         // Match the installed .desktop file and hicolor icon basename so
         // Linux shells can associate the running Electron window with its launcher.
         StartupWMClass: appId,
+        // Keep productName stable for /opt paths; stamp only the menu label (like macOS titlebar DEV).
+        Name: linuxLauncherName(),
+        Comment: channel === "prod" ? "Open source AI coding agent" : `OpenCode ${channel} ${pkg.version} (${buildStamp})`,
       },
     },
     target: ["deb"],

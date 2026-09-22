@@ -24,6 +24,15 @@ for (const channel of channels) {
     expect(config.extraMetadata?.desktopName).toBe(`${channel.appId}.desktop`)
     expect(config.linux?.executableName).toBe(channel.appId)
     expect(config.linux?.desktop?.entry?.StartupWMClass).toBe(channel.appId)
+    if (channel.channel === "prod") {
+      expect(config.linux?.desktop?.entry?.Name).toBe("OpenCode")
+    }
+    if (channel.channel === "dev") {
+      expect(config.linux?.desktop?.entry?.Name).toMatch(/^OpenCode Dev /)
+    }
+    if (channel.channel === "beta") {
+      expect(config.linux?.desktop?.entry?.Name).toMatch(/^OpenCode Beta /)
+    }
     expect(config.deb?.fpm).toContainEqual(expect.stringContaining(`/usr/share/metainfo/${channel.appId}.metainfo.xml`))
   })
 }

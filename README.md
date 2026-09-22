@@ -51,18 +51,102 @@ scoop bucket add extras; scoop install extras/opencode-desktop
 
 #### Building From Source
 
-Requires [Bun](https://bun.sh) `1.3.x` or newer. On macOS, install the Xcode command line tools first (`xcode-select --install`).
+Requires [Bun](https://bun.sh) `1.3.x` or newer.
+
+**macOS:** install the Xcode command line tools first (`xcode-select --install`).
+
+**Linux (Debian/Ubuntu):** install build tools used by Electron packaging:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y build-essential fakeroot dpkg rpm
+```
+
+```bash
+# Install Bun (Linux / macOS)
+curl -fsSL https://bun.sh/install | bash
+# then open a new shell, or: export PATH="$HOME/.bun/bin:$PATH"
+
 # Install workspace dependencies (run from the repo root)
 bun install
 
 # Run the desktop app in development
 bun run dev:desktop
+```
 
-# Build the app's JS assets, then bundle it into dist/
+##### Linux: build a `.deb`
+
+From the repo root (matches CI in `.github/workflows/build-desktop.yml`):
+
+```bash
+# Optional: channel + stamp shown in the titlebar (defaults: channel=dev)
+export OPENCODE_CHANNEL=dev   # or beta | prod
+export OPENCODE_BUILD=local
+
+# 1) Shared web UI assets
+bun run --cwd packages/app build
+
+# 2) Desktop JS bundle (runs prebuild: icons, metainfo, sidecar CLI)
 bun run --cwd packages/desktop build
-bun run --cwd packages/desktop package:mac    # or package:linux on Linux
+
+# 3) Package Debian installer
+bun run --cwd packages/desktop package:linux --publish never
+```
+
+Or one shot:
+
+```bash
+./script/build-linux-deb.ts
+```
+
+Artifact:
+
+```text
+packages/desktop/dist/opencode-desktop-linux-x64.deb    # or linux-arm64
+```
+
+Install and run:
+
+```bash
+sudo apt-get install -y ./packages/desktop/dist/opencode-desktop-linux-*.deb
+# Dev channel launcher / binary id:
+ai.opencode.desktop.dev
+# or from the app menu: "OpenCode Dev"
+```
+
+If packaging fails with `self-signed certificate in certificate chain`, download Electron offline and place it where the builder will pick it up automatically:
+
+```bash
+mkdir -p ~/.cache/electron
+# electron version = packages/desktop/package.json → devDependencies.electron
+curl -L -o ~/.cache/electron/electron-v42.3.3-linux-x64.zip \
+  https://github.com/electron/electron/releases/download/v42.3.3/electron-v42.3.3-linux-x64.zip
+```
+
+Or point explicitly: `ELECTRON_DIST=/path/to/electron-v42.3.3-linux-x64.zip`.
+
+If it then fails while **building the `.deb`** (fpm download), either:
+
+```bash
+NODE_TLS_REJECT_UNAUTHORIZED=0 bun run --cwd packages/desktop package:linux --publish never
+```
+
+or download fpm yourself:
+
+```bash
+mkdir -p ~/.cache/electron-builder
+curl -L -o /tmp/fpm-linux-amd64.7z \
+  'https://github.com/electron-userland/electron-builder-binaries/releases/download/fpm@2.1.4/fpm-1.17.0-ruby-3.4.3-linux-amd64.7z'
+# then re-run package:linux — electron-builder will unpack into its cache
+# (or: NODE_TLS_REJECT_UNAUTHORIZED=0 so it can finish the extract/download)
+```
+
+##### macOS: build a `.dmg`
+
+```bash
+bun run --cwd packages/app build
+bun run --cwd packages/desktop build
+bun run --cwd packages/desktop package:mac --publish never
 ```
 
 Artifacts land in `packages/desktop/dist/`:
