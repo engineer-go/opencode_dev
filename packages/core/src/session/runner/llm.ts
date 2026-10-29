@@ -13,6 +13,8 @@ import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
+import { Flag } from "../../flag/flag"
+import { InstallationChannel, InstallationVersion } from "../../installation/version"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
 import { PermissionV2 } from "../../permission"
@@ -217,6 +219,16 @@ const layer = Layer.effect(
         model,
         http: {
           headers: {
+            ...(model.provider.startsWith("opencode")
+              ? {
+                  "User-Agent": `opencode/${InstallationChannel}/${InstallationVersion}/${Flag.OPENCODE_CLIENT}`,
+                  "x-opencode-client": Flag.OPENCODE_CLIENT,
+                  "x-opencode-project": session.projectID,
+                  "x-opencode-session": session.id,
+                  "x-opencode-session-id": session.id,
+                  ...(session.parentID ? { "x-opencode-parent-session-id": session.parentID } : {}),
+                }
+              : {}),
             "x-session-affinity": session.id,
             "X-Session-Id": session.id,
             ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),

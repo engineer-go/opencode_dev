@@ -77,9 +77,17 @@ const getBase = (appId: string): Configuration => ({
   extraMetadata: {
     desktopName: `${appId}.desktop`,
   },
-  files: ["out/**/*", "!out/**/*.map", "!out/**/*.d.ts", "resources/**/*", "!resources/opencode-cli*"],
+  files: [
+    "out/**/*",
+    "!out/**/*.map",
+    "!out/**/*.d.ts",
+    "resources/**/*",
+    "!resources/opencode-cli*",
+    "!resources/opencode-server*",
+  ],
   electronLanguages: ["en"],
   extraResources: [
+    { from: "resources/", to: "", filter: ["opencode-server*"] },
     ...(channel === "dev"
       ? [
           {
@@ -127,7 +135,8 @@ const getBase = (appId: string): Configuration => ({
         StartupWMClass: appId,
         // Keep productName stable for /opt paths; stamp only the menu label (like macOS titlebar DEV).
         Name: linuxLauncherName(),
-        Comment: channel === "prod" ? "Open source AI coding agent" : `OpenCode ${channel} ${pkg.version} (${buildStamp})`,
+        Comment:
+          channel === "prod" ? "Open source AI coding agent" : `OpenCode ${channel} ${pkg.version} (${buildStamp})`,
       },
     },
     target: ["deb"],

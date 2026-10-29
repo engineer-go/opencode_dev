@@ -188,6 +188,33 @@ describe("CatalogV2", () => {
     }),
   )
 
+  it.effect("inherits provider transport when a model overrides only its endpoint", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const providerID = ProviderV2.ID.make("opencode")
+      const modelID = ModelV2.ID.make("free-model")
+      yield* catalog.transform((draft) => {
+        draft.provider.update(providerID, (provider) => {
+          provider.api = {
+            type: "aisdk",
+            package: "@ai-sdk/openai-compatible",
+            url: "https://provider.example.com/v1",
+          }
+        })
+        draft.model.update(providerID, modelID, (model) => {
+          model.api.url = "https://model.example.com/v1"
+        })
+      })
+
+      expect(required(yield* catalog.model.get(providerID, modelID)).api).toMatchObject({
+        id: modelID,
+        type: "aisdk",
+        package: "@ai-sdk/openai-compatible",
+        url: "https://model.example.com/v1",
+      })
+    }),
+  )
+
   it.effect("resolves default model api from provider api", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service

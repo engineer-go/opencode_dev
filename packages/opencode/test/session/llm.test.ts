@@ -13,6 +13,7 @@ import { LLMClient, RequestExecutor } from "@opencode-ai/llm/route"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
+import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 
 import { testEffect } from "../lib/effect"
 import type { Agent } from "../../src/agent/agent"
@@ -803,7 +804,13 @@ describe("session.llm.stream", () => {
           tools: {},
         })
 
-        expect((yield* Effect.promise(() => request)).headers.get("x-parent-session-id")).toBe(parentSessionID)
+        const headers = (yield* Effect.promise(() => request)).headers
+        expect(headers.get("x-parent-session-id")).toBe(parentSessionID)
+        expect(headers.get("x-opencode-session-id")).toBe(sessionID)
+        expect(headers.get("x-opencode-parent-session-id")).toBe(parentSessionID)
+        expect(headers.get("user-agent")).toStartWith(
+          `opencode/${InstallationChannel}/${InstallationVersion}/${headers.get("x-opencode-client")}`,
+        )
       }),
     {
       config: () => {

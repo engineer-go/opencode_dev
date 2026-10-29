@@ -16,6 +16,8 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@opencode-ai/core/effect/app-node-platform"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Flag } from "@opencode-ai/core/flag/flag"
+import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { EventTable } from "@opencode-ai/core/event/sql"
 import { Project } from "@opencode-ai/core/project"
@@ -2530,6 +2532,25 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.http?.headers).toEqual({
         "x-session-affinity": sessionID,
         "X-Session-Id": sessionID,
+      })
+    }),
+  )
+
+  it.effect("identifies OpenCode model requests with the installed client and session", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentModel = Model.make({ id: "free-model", provider: "opencode", route: OpenAIChat.route })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Run identified request" }), resume: false })
+      requests.length = 0
+      yield* session.resume(sessionID)
+
+      expect(requests[0]?.http?.headers).toMatchObject({
+        "User-Agent": `opencode/${InstallationChannel}/${InstallationVersion}/${Flag.OPENCODE_CLIENT}`,
+        "x-opencode-client": Flag.OPENCODE_CLIENT,
+        "x-opencode-project": Project.ID.global,
+        "x-opencode-session": sessionID,
+        "x-opencode-session-id": sessionID,
       })
     }),
   )

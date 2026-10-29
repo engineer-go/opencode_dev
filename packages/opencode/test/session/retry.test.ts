@@ -146,6 +146,52 @@ describe("session.retry.delay", () => {
       expect(attempts).toStrictEqual([1, 2, 3, 4, 5])
     }),
   )
+
+  it.instance("policy stops immediately on quota limits", () =>
+    Effect.gen(function* () {
+      const calls: { attempt: number; next: number }[] = []
+      const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+        new SessionV1.APIError({
+          message: "Free usage exceeded",
+          isRetryable: true,
+          statusCode: 429,
+          responseHeaders: { "retry-after": "14545" },
+          responseBody: JSON.stringify({
+            type: "error",
+            error: { type: "FreeUsageLimitError", message: "Free usage exceeded" },
+          }),
+        }).toObject(),
+      )
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "opencode",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              calls.push({ attempt: info.attempt, next: info.next })
+            }),
+        }),
+      )
+
+      yield* Effect.ignore(step(error))
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0].attempt).toBe(1)
+      expect(calls[0].next).toBeLessThan(Date.now() + 1000)
+
+      const failure = yield* Effect.fail(error).pipe(
+        Effect.retry(
+          SessionRetry.policy({
+            provider: "opencode",
+            parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+            set: () => Effect.void,
+          }),
+        ),
+        Effect.flip,
+      )
+      expect(failure).toBe(error)
+    }),
+  )
 })
 
 describe("session.retry.retryable", () => {

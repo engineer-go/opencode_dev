@@ -192,7 +192,10 @@ export function policy(opts: {
       if (!retry) return Cause.done(meta.attempt)
       if (meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
-        const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
+        // Quota limits reset on the server's schedule, often hours away. Surface the
+        // action once and stop retrying instead of sleeping until the reset.
+        const terminal = retry.action?.reason === "free_tier_limit" || retry.action?.reason === "account_rate_limit"
+        const wait = terminal ? 0 : delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
         const now = yield* Clock.currentTimeMillis
         yield* opts.set({
           attempt: meta.attempt,
@@ -200,6 +203,7 @@ export function policy(opts: {
           action: retry.action,
           next: now + wait,
         })
+        if (terminal) return yield* Cause.done(meta.attempt)
         return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
       })
     }),

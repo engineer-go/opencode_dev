@@ -1,7 +1,10 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {},
-  "permission": {},
+  "permission": {
+    // The free endpoint rejects requests advertising this Playwright RCE tool.
+    "playwright_browser_run_code_unsafe": "deny",
+  },
   "references": {
     "effect": {
       "repository": "github.com/Effect-TS/effect-smol",
